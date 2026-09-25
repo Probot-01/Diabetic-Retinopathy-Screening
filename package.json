@@ -1,0 +1,16 @@
+{
+  "name": "netrasetu",
+  "private": true,
+  "description": "Repo-root task runner. Holds no dependencies: each service installs its own.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev:all": "node scripts/dev-up.js",
+    "dev:check": "node scripts/dev-up.js --check",
+    "db:up": "docker compose -f docker-compose.dev.yml up -d --wait",
+    "db:down": "docker compose -f docker-compose.dev.yml down",
+    "db:migrate": "node scripts/setupCentralDb.js",
+    "db:seed": "node scripts/seed-demo.js --write-phc-env"
+  }
+}
