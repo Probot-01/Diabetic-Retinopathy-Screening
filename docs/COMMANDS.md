@@ -3,6 +3,15 @@
 > Commands are written for **PowerShell** (Windows), which has no `&&`: chained steps use `;`.
 > In bash the same lines work unchanged.
 
+## One command (recommended)
+
+```bash
+npm run dev:all          # Postgres (docker) + migrations + seed + all four services + MATLAB check
+npm run dev:check        # same, then prints health and stops
+```
+
+See the README's "Run locally". The manual steps below still work.
+
 ## Install
 
 ```bash
@@ -23,21 +32,25 @@ cd central-system/backend; npm run setup-db
 cd ../../phc-local-app/backend; npm run setup-db
 ```
 
-`.env` at repo root:
+Each service has its own `.env` (copy its `.env.example`). A repo-root `.env`
+is still read by both backends as a fallback:
 
 ```ini
+# central-system/backend/.env
 DATABASE_URL=postgres://USER:PASSWORD@localhost:5432/dr_screening_central
 MATLAB_EXECUTABLE=matlab
 MATLAB_TIMEOUT_MS=120000
 SMS_DRY_RUN=1
+# phc-local-app/backend/.env
+CENTRAL_API_URL=http://localhost:5000
 ```
 
 Frontend `.env` (or Vercel project settings):
 
 ```ini
-VITE_USE_MOCK_DATA=false
-VITE_CENTRAL_API_BASE=http://localhost:5000
-VITE_LOCAL_API_BASE=http://localhost:4000
+VITE_DATA_MODE=live                           # mock = fixtures + DEMO DATA banner
+VITE_CENTRAL_API_BASE=http://localhost:5000   # central-system/frontend
+VITE_LOCAL_API_BASE=http://localhost:4000     # phc-local-app/frontend
 ```
 
 ## Run
