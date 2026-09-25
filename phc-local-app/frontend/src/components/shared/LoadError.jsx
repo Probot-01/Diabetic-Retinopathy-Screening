@@ -8,7 +8,7 @@ import React from 'react';
  *   <LoadError error={err} what="the review queue" onRetry={reload} />
  *
  * `title` replaces the "COULD NOT LOAD …" heading (e.g. for a failed save).
- * `error` is normally an ApiError from centralApiClient ({ code, message }).
+ * `error` is normally an ApiError from localApiClient ({ code, message }).
  */
 export const LoadError = ({ error, what = 'this data', title, onRetry, compact = false }) => (
   <div
@@ -33,7 +33,7 @@ export const LoadError = ({ error, what = 'this data', title, onRetry, compact =
       </p>
     )}
     {onRetry && (
-      <button type="button" className="btn btn--secondary" onClick={onRetry} style={{ marginTop: 12 }}>
+      <button type="button" className="btn btn--outline" onClick={onRetry} style={{ marginTop: 12 }}>
         RETRY
       </button>
     )}

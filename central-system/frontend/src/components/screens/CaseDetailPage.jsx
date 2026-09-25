@@ -76,11 +76,11 @@ export const CaseDetailPage = () => {
       centralApi.getCaseDetail(caseId),
       centralApi.claimCase(caseId).catch(err => {
         if (err.status === 409) setClaimedBy(err.claimedBy || 'Another Reviewer');
-        else noteSideError('your claim on this case')(err);
+        else noteSideError('COULD NOT CLAIM THIS CASE — another reviewer may open it too')(err);
       }),
       centralApi.getReviews(caseId).then(reviews => {
         if (reviews && reviews.length > 0) setPriorReview(reviews[0]);
-      }).catch(noteSideError('the review history')),
+      }).catch(noteSideError('COULD NOT LOAD THE REVIEW HISTORY — a prior review may exist')),
     ]).then(([data]) => {
       if (cancelled) return;
       setCaseData(data);
@@ -137,7 +137,7 @@ export const CaseDetailPage = () => {
   return (
     <div className={`section case-detail ${reviewSubmitted ? 'case-detail--submitted' : ''}`}>
       {sideErrors.map(({ what, err }) => (
-        <LoadError key={what} error={err} what={what} compact />
+        <LoadError key={what} error={err} title={what} compact />
       ))}
       {/* Top Bar — Case ID + Tier + Mismatch Warning */}
       <div className={`case-detail__top-bar ${isBranchMismatch ? 'case-detail__top-bar--mismatch' : ''}`}>

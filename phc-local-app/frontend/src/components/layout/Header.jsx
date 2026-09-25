@@ -9,6 +9,7 @@ import { LanguageSelector } from '../shared/LanguageSelector';
 export const Header = ({ auth, onLogout }) => {
   const { t } = useTranslation();
   const [syncStatus, setSyncStatus] = useState({ online: false, pendingCount: 0 });
+  const [localError, setLocalError] = useState(null);
 
   useEffect(() => {
     // Poll sync status
@@ -16,9 +17,12 @@ export const Header = ({ auth, onLogout }) => {
       try {
         const status = await localApi.getSyncStatus();
         setSyncStatus(status);
+        setLocalError(null);
       } catch (err) {
+        // Not "central is offline": THIS PC's backend did not answer, so the
+        // pending count is unknown too. Say that, not a stale number.
         console.error('Failed to get sync status', err);
-        setSyncStatus(prev => ({ ...prev, online: false }));
+        setLocalError(err);
       }
     };
     
@@ -98,13 +102,20 @@ export const Header = ({ auth, onLogout }) => {
       <div>
         <div className="u-flex-col">
           <span className="t-mono" style={{ fontSize: '10px' }}>{PHC_NAME}</span>
-          <div className="sync-badge u-mt-1">
-            <div className={`sync-dot ${syncStatus.online ? 'sync-dot--online' : 'sync-dot--offline'}`}></div>
-            <span>{syncStatus.online ? t('header.status.online') : t('header.status.offline')}</span>
-            <span style={{ opacity: 0.5, marginLeft: '4px' }}>
-              ● {syncStatus.pendingCount} {t('header.status.pending')}
-            </span>
-          </div>
+          {localError ? (
+            <div className="sync-badge u-mt-1" title={localError.message}>
+              <div className="sync-dot sync-dot--offline"></div>
+              <span>PHC BACKEND UNREACHABLE</span>
+            </div>
+          ) : (
+            <div className="sync-badge u-mt-1">
+              <div className={`sync-dot ${syncStatus.online ? 'sync-dot--online' : 'sync-dot--offline'}`}></div>
+              <span>{syncStatus.online ? t('header.status.online') : t('header.status.offline')}</span>
+              <span style={{ opacity: 0.5, marginLeft: '4px' }}>
+                ● {syncStatus.pendingCount} {t('header.status.pending')}
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </header>

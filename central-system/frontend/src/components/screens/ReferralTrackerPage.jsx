@@ -285,7 +285,7 @@ export const ReferralTrackerPage = () => {
   return (
     <div className="section">
       {updateError && (
-        <LoadError error={updateError.err} what={`the update to referral ${updateError.referralId}`} compact />
+        <LoadError error={updateError.err} title={`REFERRAL ${updateError.referralId} WAS NOT UPDATED`} compact />
       )}
       <div className="u-flex u-items-center u-justify-between u-mb-6">
         <div>
