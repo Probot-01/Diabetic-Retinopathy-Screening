@@ -1,0 +1,38 @@
+# NetraSetu -- local development infrastructure.
+#
+#   docker compose -f docker-compose.dev.yml up -d --wait
+#
+# Postgres only. There is no Redis: the grading queue is in-process
+# (central-system/backend/services/gradingQueue.js -- "The queue is in memory")
+# and no package in either backend depends on Redis.
+#
+# Published on host port 5433 by default, NOT 5432, so it never collides with a
+# Postgres already installed on the machine. Matches DATABASE_URL in
+# central-system/backend/.env.example. Override with NETRASETU_PG_PORT /
+# NETRASETU_PG_PASSWORD in the repo-root .env (Compose reads it).
+#
+# Dev-only credentials: this container is for a laptop, never a deployment.
+
+name: netrasetu-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: netrasetu
+      POSTGRES_PASSWORD: ${NETRASETU_PG_PASSWORD:-netrasetu_dev}
+      POSTGRES_DB: dr_screening_central
+    ports:
+      - "127.0.0.1:${NETRASETU_PG_PORT:-5433}:5432"
+    volumes:
+      - netrasetu_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netrasetu -d dr_screening_central"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  netrasetu_pgdata:
