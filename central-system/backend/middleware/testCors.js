@@ -62,7 +62,9 @@ check('*.app is rejected as a pattern (suffix has no inner dot)',
   'a one-label suffix would open a whole TLD');
 
 console.log('\n--- middleware behaviour ---');
-function run(headers, method = 'GET', opts) {
+// The behaviour checks run against an explicit *.vercel.app list rather than
+// whatever CORS_ALLOWED_ORIGINS the shell happens to have.
+function run(headers, method = 'GET', opts = { origins: cors.DEMO_DEFAULTS }) {
   const req = { headers, method };
   const sent = { headers: {}, status: null };
   const res = {
@@ -120,6 +122,37 @@ check('a disallowed origin gets NO Allow-Credentials either',
 r = run({ origin: 'http://localhost:9999' }, 'GET', { origins: ['http://localhost:9999'] });
 check('an explicit origins option overrides the env defaults',
   r.headers['Access-Control-Allow-Origin'] === 'http://localhost:9999');
+
+console.log('\n--- CORS_ALLOWED_ORIGINS parsing ---');
+function withEnv(value, fn) {
+  const saved = process.env.CORS_ALLOWED_ORIGINS;
+  if (value === undefined) delete process.env.CORS_ALLOWED_ORIGINS;
+  else process.env.CORS_ALLOWED_ORIGINS = value;
+  try { return fn(); } finally {
+    if (saved === undefined) delete process.env.CORS_ALLOWED_ORIGINS;
+    else process.env.CORS_ALLOWED_ORIGINS = saved;
+  }
+}
+const viaEnv = (value, origin) => withEnv(value, () => {
+  const sent = {};
+  cors()({ headers: { origin }, method: 'GET' }, { setHeader: (k, v) => { sent[k] = v; } }, () => {});
+  return sent['Access-Control-Allow-Origin'];
+});
+check('unset: both local dev frontends are allowed',
+  viaEnv(undefined, 'http://localhost:5173') === 'http://localhost:5173' &&
+  viaEnv(undefined, 'http://localhost:5174') === 'http://localhost:5174');
+check('unset: a Vercel origin is NOT allowed by default',
+  viaEnv(undefined, 'https://demo.vercel.app') === undefined,
+  'a hosted frontend must be listed explicitly');
+check('comma-separated list is honoured, whitespace trimmed',
+  viaEnv(' http://a.test:1 , http://b.test:2 ', 'http://b.test:2') === 'http://b.test:2' &&
+  viaEnv(' http://a.test:1 , http://b.test:2 ', 'http://localhost:5173') === undefined);
+let threw = false;
+try { withEnv('http://a.test,*', () => cors()); } catch { threw = true; }
+check("a bare '*' in the list is refused at startup (credentials are on)", threw);
+threw = false;
+try { withEnv('null', () => cors()); } catch { threw = true; }
+check("the 'null' origin is refused at startup", threw);
 
 console.log(`\n===== ${failures === 0 ? 'all checks passed' : failures + ' FAILED'} =====`);
 process.exit(failures === 0 ? 0 : 1);
