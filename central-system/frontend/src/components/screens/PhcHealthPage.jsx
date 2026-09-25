@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { centralApi } from '../../api/centralApiClient';
+import { LoadError } from '../shared/LoadError';
 
 // 3-State Sort Header Component (Matching Reference Image 2)
 const SortHeader = React.memo(({ label, field, sortKey, sortDir, onSort, alignRight = false }) => {
@@ -78,6 +79,11 @@ export const PhcHealthPage = () => {
   const [phcList, setPhcList] = useState([]);
   const [systemHealth, setSystemHealth] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Two independent sources, so two independent failures: System Health can
+  // be live while the PHC list has no endpoint (centralApiClient), and one
+  // must not blank the other.
+  const [phcError, setPhcError] = useState(null);
+  const [healthError, setHealthError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
 
   // 3-State Column Sorting
@@ -85,15 +91,14 @@ export const PhcHealthPage = () => {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
+    Promise.allSettled([
       centralApi.getPhcSyncStatuses(),
       centralApi.getSystemHealth(),
     ]).then(([phcs, health]) => {
-      if (active) {
-        setPhcList(phcs);
-        setSystemHealth(health);
-        setLoading(false);
-      }
+      if (!active) return;
+      if (phcs.status === 'fulfilled') setPhcList(phcs.value); else setPhcError(phcs.reason);
+      if (health.status === 'fulfilled') setSystemHealth(health.value); else setHealthError(health.reason);
+      setLoading(false);
     });
     return () => { active = false; };
   }, []);
@@ -167,6 +172,8 @@ export const PhcHealthPage = () => {
 
   return (
     <div className="section">
+      {healthError && <LoadError error={healthError} what="system health" />}
+
       {/* Consolidated System Health Banner (§5.3 / §10.7) */}
       {hasCriticalAlerts && (
         <div
@@ -184,7 +191,7 @@ export const PhcHealthPage = () => {
                 CRITICAL SYSTEM HEALTH EXCEPTION
               </span>
               <span className="t-mono" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-crimson)' }}>
-                {systemHealth.alerts?.length || 2} ACTIVE SYSTEM ALERTS TRIGGERED
+                {systemHealth.alerts?.length ?? 0} ACTIVE SYSTEM ALERTS TRIGGERED
               </span>
             </div>
             <span className="t-mono" style={{ fontSize: '10px', color: 'var(--c-text-muted)' }}>
@@ -250,7 +257,8 @@ export const PhcHealthPage = () => {
                 {systemHealth.matlabSessionStatus.toUpperCase()}
               </div>
               <div className="stat__delta" style={{ color: 'var(--c-success)' }}>
-                PID: {systemHealth.matlabSession.pid} • 0 Restarts
+                {systemHealth.matlabSession?.pid != null ? `PID: ${systemHealth.matlabSession.pid} • ` : ''}
+                {systemHealth.matlabSession?.restartsInWindow ?? '—'} restarts in window
               </div>
             </div>
           </div>
@@ -262,7 +270,9 @@ export const PhcHealthPage = () => {
                 {systemHealth.unreviewedCases.length}
               </div>
               <div className="stat__delta" style={{ color: systemHealth.unreviewedCases.length > 0 ? '#A82222' : 'var(--c-success)' }}>
-                {systemHealth.unreviewedCases.length > 0 ? '1 case breach warning' : 'Within 48h SLA'}
+                {systemHealth.unreviewedCases.length > 0
+                  ? `${systemHealth.unreviewedCases.length} case${systemHealth.unreviewedCases.length === 1 ? '' : 's'} past SLA`
+                  : 'Within 48h SLA'}
               </div>
             </div>
           </div>
@@ -276,7 +286,7 @@ export const PhcHealthPage = () => {
           <h1 className="section__title" style={{ marginBottom: 0 }}>{t('central.phcHealth.title', 'PHC HEALTH')}</h1>
         </div>
         {/* Interactive filter badges */}
-        <div className="u-flex u-gap-3 u-items-center">
+        {!phcError && <div className="u-flex u-gap-3 u-items-center">
           {sortConfig.direction !== 'none' && (
             <button
               className="btn btn--secondary"
@@ -353,9 +363,10 @@ export const PhcHealthPage = () => {
           >
             {totalPending} {t('central.phcHealth.filters.pending', 'PENDING')}
           </button>
-        </div>
+        </div>}
       </div>
 
+      {phcError ? <LoadError error={phcError} what="the PHC list" /> : (<>
       {/* Summary Stats - 3 Key Metric Cards with brutalist shadow and clean borders */}
       <div className="bento u-mb-6">
         <div className="bento--span-4">
@@ -448,6 +459,7 @@ export const PhcHealthPage = () => {
           </tbody>
         </table>
       </div>
+      </>)}
     </div>
   );
 };

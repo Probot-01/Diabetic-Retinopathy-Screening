@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { centralApi } from '../../api/centralApiClient';
+import { LoadError } from '../shared/LoadError';
 
 const getStatusConfig = (t) => ({
   referred: { label: t('central.referral.pipeline.referred', 'REFERRED'), badge: 'badge--warning', next: 'contacted' },
@@ -117,6 +118,9 @@ export const ReferralTrackerPage = () => {
   const statusConfig = getStatusConfig(t);
   const [referrals, setReferrals] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [updateError, setUpdateError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Multi-Filter States (Search, PHC, Grade, Status)
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,21 +132,37 @@ export const ReferralTrackerPage = () => {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'none' });
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
     centralApi.getReferrals().then(data => {
+      if (cancelled) return;
       setReferrals(data);
       setLoading(false);
+    }).catch(err => {
+      if (cancelled) return;
+      setLoadError(err);
+      setLoading(false);
     });
-  }, []);
+    return () => { cancelled = true; };
+  }, [reloadKey]);
 
   const handleAdvance = useCallback(async (referral) => {
     const nextStatus = statusConfig[referral.status]?.next;
     if (!nextStatus) return;
 
-    // Instantly update local state optimistically
-    const updated = await centralApi.updateReferral(referral.referralId, {
-      status: nextStatus,
-      assignedWorker: referral.assignedWorker || 'ASHA-112',
-    });
+    // Local state changes only once the server has accepted the update.
+    setUpdateError(null);
+    let updated;
+    try {
+      updated = await centralApi.updateReferral(referral.referralId, {
+        status: nextStatus,
+        assignedWorker: referral.assignedWorker || 'ASHA-112',
+      });
+    } catch (err) {
+      setUpdateError({ referralId: referral.referralId, err });
+      return;
+    }
     setReferrals(prev =>
       prev.map(r => (r.referralId === referral.referralId ? { ...r, ...updated } : r))
     );
@@ -254,8 +274,19 @@ export const ReferralTrackerPage = () => {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="section">
+        <LoadError error={loadError} what="referrals" onRetry={() => setReloadKey(k => k + 1)} />
+      </div>
+    );
+  }
+
   return (
     <div className="section">
+      {updateError && (
+        <LoadError error={updateError.err} what={`the update to referral ${updateError.referralId}`} compact />
+      )}
       <div className="u-flex u-items-center u-justify-between u-mb-6">
         <div>
           <p className="section__subtitle">{t('central.referral.subtitle', 'DISTRICT WORKER')}</p>

@@ -11,6 +11,7 @@ import { PhcHealthPage } from './components/screens/PhcHealthPage';
 import { ResourceRecommendationsPanel } from './components/screens/ResourceRecommendationsPanel';
 import { CentralProfilePage } from './components/screens/CentralProfilePage';
 import { CentralSettingsPage } from './components/settings/CentralSettingsPage';
+import { DemoDataBanner } from './components/shared/DemoDataBanner';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -173,6 +174,7 @@ const RoleRouter = () => {
 function App() {
   return (
     <ErrorBoundary>
+      <DemoDataBanner />
       <BrowserRouter>
         <RoleRouter />
       </BrowserRouter>

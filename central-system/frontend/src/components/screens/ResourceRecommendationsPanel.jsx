@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { centralApi } from '../../api/centralApiClient';
+import { LoadError } from '../shared/LoadError';
 
 export const ResourceRecommendationsPanel = () => {
   const { t } = useTranslation();
@@ -10,18 +11,21 @@ export const ResourceRecommendationsPanel = () => {
   const [simulating, setSimulating] = useState(false);
   const [validating, setValidating] = useState(false);
   const [toast, setToast] = useState(null);
+  // Independent sources, independent failures. 404 before a model's first run
+  // is an expected state (api-contracts.md), not a broken server.
+  const [recError, setRecError] = useState(null);
+  const [valError, setValError] = useState(null);
 
   useEffect(() => {
     let active = true;
-    Promise.all([
+    Promise.allSettled([
       centralApi.getResourceRecommendations(),
       centralApi.getSimulinkValidation(),
-    ]).then(([recData, valData]) => {
-      if (active) {
-        setRecommendations(recData);
-        setValidation(valData);
-        setLoading(false);
-      }
+    ]).then(([rec, val]) => {
+      if (!active) return;
+      if (rec.status === 'fulfilled') setRecommendations(rec.value); else setRecError(rec.reason);
+      if (val.status === 'fulfilled') setValidation(val.value); else setValError(val.reason);
+      setLoading(false);
     });
     return () => { active = false; };
   }, []);
@@ -31,7 +35,8 @@ export const ResourceRecommendationsPanel = () => {
     try {
       const updated = await centralApi.refreshResourceRecommendations();
       setRecommendations(updated);
-      setToast({ type: 'success', message: 'Resource model simulation completed (2.0s run time).' });
+      setRecError(null);
+      setToast({ type: 'success', message: `Resource model run completed${updated?.runSeconds != null ? ` (${updated.runSeconds}s run time)` : ''}.` });
     } catch (err) {
       setToast({ type: 'error', message: `Simulation run failed: ${err.message}` });
     } finally {
@@ -45,7 +50,8 @@ export const ResourceRecommendationsPanel = () => {
     try {
       const updated = await centralApi.refreshSimulinkValidation();
       setValidation(updated);
-      setToast({ type: 'success', message: 'SimEvents .slx co-validation finished with status: AGREE.' });
+      setValError(null);
+      setToast({ type: 'success', message: `SimEvents .slx co-validation finished with status: ${String(updated?.status ?? 'unknown').toUpperCase()}.` });
     } catch (err) {
       setToast({ type: 'error', message: `Simulink validation failed: ${err.message}` });
     } finally {
@@ -54,7 +60,29 @@ export const ResourceRecommendationsPanel = () => {
     }
   };
 
-  if (loading || !recommendations) {
+  if (!loading && !recommendations) {
+    const notRunYet = recError?.code === 'recommendations_not_generated';
+    return (
+      <div className="section">
+        {toast && <p className="t-mono u-mb-4" style={{ color: toast.type === 'error' ? 'var(--c-crimson)' : 'var(--c-success)' }}>{toast.message}</p>}
+        <div className="u-flex u-items-center u-justify-between u-mb-6">
+          <div>
+            <p className="section__subtitle">{t('central.resources.subtitle', 'DISTRICT RESOURCE PLANNING & MODELLING')}</p>
+            <h1 className="section__title" style={{ marginBottom: 0 }}>{t('central.resources.title', 'RESOURCE ALLOCATION')}</h1>
+          </div>
+          <button className="btn btn--primary" onClick={handleRunSimulation} disabled={simulating}>
+            {simulating ? 'RUNNING THE MODEL…' : '⚡ RUN THE RESOURCE MODEL NOW'}
+          </button>
+        </div>
+        {notRunYet
+          ? <p className="t-mono">The district resource model has not run on this server yet. It runs daily, or now with the button above.</p>
+          : <LoadError error={recError} what="resource recommendations" />}
+        {valError && valError.code !== 'validation_not_run' && <LoadError error={valError} what="the Simulink validation" />}
+      </div>
+    );
+  }
+
+  if (loading) {
     return (
       <div className="section">
         <div className="skeleton" style={{ height: '40px', width: '320px', marginBottom: 'var(--sp-6)' }} />
@@ -160,7 +188,10 @@ export const ResourceRecommendationsPanel = () => {
               {recommendations.minOphthalmologistsRoutine} <span style={{ fontSize: '14px', color: 'var(--c-text-muted)' }}>Doctors</span>
             </div>
             <div className="stat__delta" style={{ color: 'var(--c-warning)' }}>
-              Current pool: {current.numOphthalmologists} (Shortage: +1)
+              Current pool: {current.numOphthalmologists}
+              {recommendations.minOphthalmologistsRoutine != null && current.numOphthalmologists != null
+                && recommendations.minOphthalmologistsRoutine > current.numOphthalmologists
+                ? ` (Shortage: +${recommendations.minOphthalmologistsRoutine - current.numOphthalmologists})` : ''}
             </div>
           </div>
         </div>
@@ -231,6 +262,10 @@ export const ResourceRecommendationsPanel = () => {
           </div>
         </div>
       </div>
+
+      {valError && (valError.code === 'validation_not_run'
+        ? <p className="t-mono u-mb-4">The Simulink co-validation has not run on this server yet (weekly, or on demand).</p>
+        : <LoadError error={valError} what="the Simulink validation" />)}
 
       {/* Simulink Model Validation Card (PS-Requirement 5 Co-Validation) */}
       {validation && (

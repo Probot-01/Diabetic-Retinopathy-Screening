@@ -7,6 +7,7 @@ export const DecisionControls = ({ caseData, onSubmit, submitted, claimedBy, pri
   const [overrideCategory, setOverrideCategory] = useState('');
   const [overrideText, setOverrideText] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   // Live review SLA timer (< 30s target)
@@ -66,8 +67,16 @@ export const DecisionControls = ({ caseData, onSubmit, submitted, claimedBy, pri
       reviewDurationSeconds: elapsedSeconds,
     };
 
-    await onSubmit(reviewData);
-    setSubmitting(false);
+    setSubmitError(null);
+    try {
+      await onSubmit(reviewData);
+    } catch (err) {
+      // The review was NOT recorded. Say so and leave the form as it is so
+      // the reviewer can retry; never show it as submitted.
+      setSubmitError(err);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const timerFormatted = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, '0')}:${String(elapsedSeconds % 60).padStart(2, '0')}`;
@@ -103,6 +112,12 @@ export const DecisionControls = ({ caseData, onSubmit, submitted, claimedBy, pri
       </div>
 
       <div style={{ padding: 'var(--sp-6)' }}>
+        {submitError && (
+          <div role="alert" style={{ marginBottom: 'var(--sp-4)', padding: '12px', border: '2px solid var(--c-crimson)', color: 'var(--c-crimson)', fontSize: 'var(--fs-small)' }}>
+            <strong>⚠ REVIEW NOT SAVED:</strong> {submitError.message || 'The request failed.'}
+            {submitError.code ? ` (${submitError.code})` : ''} Nothing was recorded; submit again once the problem is fixed.
+          </div>
+        )}
         {claimedBy && (
           <div style={{ marginBottom: 'var(--sp-4)', padding: '12px', background: 'var(--c-crimson)', color: '#fff', fontSize: 'var(--fs-small)' }}>
             <strong>⚠ CASE CLAIMED:</strong> This case is currently being reviewed by {claimedBy}. Decision controls are disabled.
