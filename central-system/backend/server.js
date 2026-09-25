@@ -14,10 +14,8 @@
 
 const path = require('path');
 
-// Explicit path: a bare .config() resolves against the process cwd, so starting
-// the server from the repo root rather than this directory would silently load
-// nothing -- taking DATABASE_URL and MATLAB_EXECUTABLE with it.
-require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+// This service's .env, then the shared root .env -- by explicit path, see loadEnv.js.
+require('./loadEnv');
 
 const express      = require('express');
 const cookieParser = require('cookie-parser');

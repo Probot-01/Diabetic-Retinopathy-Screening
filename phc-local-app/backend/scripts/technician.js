@@ -12,8 +12,7 @@
  * Without --password a random one is generated and printed once. Passwords
  * are stored only as scrypt hashes (services/passwords.js).
  */
-const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
+require('../loadEnv');
 const crypto = require('crypto');
 const db = require('../db/localDb');
 const { hashPassword } = require('../services/passwords');

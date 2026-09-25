@@ -25,16 +25,12 @@
  *   const { rows } = await pool.query('SELECT ...', [params]);
  */
 
-const path = require('path');
 const { Pool } = require('pg');
 
-// Load a repo-root .env if present (never required -- env vars set by the shell
-// or by a calling script always win, since dotenv does not overwrite).
-try {
-  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
-} catch {
-  // dotenv not installed -- fine, fall through to real env vars.
-}
+// This service's .env, then the shared root .env (never required -- env vars
+// set by the shell or by a calling script always win, since dotenv does not
+// overwrite).
+require('../loadEnv');
 
 const POOL_TUNING = {
   max: 10,                        // conservative for a single-node central server
