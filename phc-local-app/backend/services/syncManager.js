@@ -36,7 +36,15 @@ const crypto = require('crypto');
 const db        = require('../db/localDb');
 const syncState = require('./syncState');
 
-const CENTRAL_URL   = process.env.CENTRAL_URL   || 'http://localhost:5000';
+// Where central is. No built-in default: a PHC that silently synced to
+// localhost:5000 because nobody configured it would look "offline" forever with
+// nothing saying why. Unset -> every cycle is skipped and start() says so loudly;
+// capture keeps working, as it must offline. CENTRAL_URL is the old name, still
+// read so an existing .env keeps working.
+if (!process.env.CENTRAL_API_URL && process.env.CENTRAL_URL) {
+  console.warn('[syncManager] CENTRAL_URL is deprecated; rename it to CENTRAL_API_URL.');
+}
+const CENTRAL_URL   = (process.env.CENTRAL_API_URL || process.env.CENTRAL_URL || '').replace(/\/+$/, '');
 const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS || '10000', 10);
 const HEALTH_TIMEOUT = parseInt(process.env.SYNC_HEALTH_TIMEOUT_MS || '3000', 10);
 const UPLOAD_TIMEOUT = parseInt(process.env.SYNC_UPLOAD_TIMEOUT_MS || '600000', 10);
@@ -84,6 +92,7 @@ let running = false;   // guards against a slow cycle overlapping the next tick
  * never drains, with nothing in the logs to say why.
  */
 async function isOnline() {
+  if (!CENTRAL_URL) return false;
   try {
     const res = await fetch(`${CENTRAL_URL}/health`, {
       signal: AbortSignal.timeout(HEALTH_TIMEOUT),
@@ -412,6 +421,12 @@ function start({ intervalMs = SYNC_INTERVAL } = {}) {
       running = false;
     }
   };
+
+  if (!CENTRAL_URL) {
+    console.error('[syncManager] CENTRAL_API_URL is not set -- NOTHING WILL SYNC. '
+      + 'Captures are kept in the local queue until it is set and the backend restarted.');
+    return { stop };
+  }
 
   timer = setInterval(tick, intervalMs);
   // Do not hold the process open just for the sync loop.

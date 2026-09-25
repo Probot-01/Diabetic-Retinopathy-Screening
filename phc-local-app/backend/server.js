@@ -12,12 +12,8 @@
  * bodies themselves are filled in by Task 3.2 -- this file only wires them up.
  */
 
-// Load the repo-root .env explicitly. A bare .config() resolves relative to the
-// process's cwd, so it would silently find nothing when the server is started
-// from anywhere other than this directory -- and the variable that goes missing
-// is MATLAB_EXECUTABLE, which makes every capture fail at the quality gate.
-const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+// This service's .env, then the shared root .env -- by explicit path, see loadEnv.js.
+require('./loadEnv');
 
 const express = require('express');
 
@@ -68,7 +64,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 // Offline-first: the sync manager drains the queue opportunistically in the
 // background. Started only when this file is run as a server, never on a bare
 // require -- otherwise importing the app in a test would silently start
-// uploading real captures to whatever CENTRAL_URL happens to point at.
+// uploading real captures to whatever CENTRAL_API_URL happens to point at.
 if (require.main === module && process.env.SYNC_DISABLED !== '1') {
   require('./services/syncManager').start();
 }
