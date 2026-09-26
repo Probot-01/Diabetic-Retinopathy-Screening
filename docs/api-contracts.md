@@ -19,6 +19,12 @@
 Kept because this file is the tie-breaker: when it changes, the code and both
 plans have to be re-checked against it, and a silent edit makes that impossible.
 
+**2026-09-26 — Engine provenance, component health, no silent segmentation fallback.**
+- **`GET /api/v1/cases/:caseId` gains `engineProvenance`**: which engine (`matlab` | `python` | `js-fallback`) produced the classifier grade, each segmentation model, the rule engine and the PHC quality gate. The shape and its null rules are under the case-detail section below. Additive. No UI shows it yet; a later session adds it to Case Detail.
+- **`POST /api/v1/cases`, `/cases/summary` and the chunk upload accept an optional `qualityGateEngine`**: a JSON-stringified engine entry for the PHC's quality gate. A malformed value returns `400 invalid_field`. If it is absent, it is stored as "not recorded". The PHC desktop backend sends it from this date. The Expo mobile app does not send it yet.
+- **`GET /health` gains `components`**: `db`, `queue`, `matlabSession` and `python`, reported separately. The top-level `status` is still `"ok"` whenever the server answers, because PHC sync and the mobile app treat `/health` as a reachability heartbeat. Monitors should read `components`.
+- **New `failureCode` value `matlab_segmentation_failed`**: segmentation's MATLAB engine failed and `SEG_ALLOW_PYTHON_FALLBACK` is not set. The case is retried, then marked `error`. It is no longer silently re-run on PyTorch, and no longer silently graded on the classifier alone.
+
 **2026-09-24 — PHC-readable report.** Added `GET /api/v1/phc/cases/:captureRef/report` and `GET /api/v1/phc/cases/:captureRef/gradcam` (PHC key). Until now nothing a PHC is allowed to call returned a grade, so a PHC front-end had no honest way to show a result. First consumer: the Expo mobile app.
 
 **2026-09-20 — Full backend audit: behaviour fixes.** Each of these changes what a client sees.
@@ -214,7 +220,30 @@ Only the first three are currently reachable. `result_pending` and `result_deliv
 ## Central API — `central-system/backend`, base URL `http://localhost:5000`
 
 ### `GET /health`
-Response `200`: `{ "status": "ok" }`
+*(components added 2026-09-26)* Unauthenticated. Response `200`:
+```json
+{
+  "status": "ok",
+  "components": {
+    "db":            { "status": "ok" | "down", "latencyMs": 3, "error": null },
+    "queue":         { "status": "ok" | "stopped", "queued": 0, "inflight": 1, "retrying": 0,
+                       "processed": 12, "failed": 0, "concurrency": 1, "running": true },
+    "matlabSession": { "status": "healthy" | "restarting" | "down" | "disabled",
+                       "heartbeatFresh": true, "lastHeartbeatAt": "…|null",
+                       "restartsInWindow": 0, "lastError": null },
+    "python":        { "status": "ok" | "unavailable" | "unknown", "executable": "…",
+                       "version": "3.11.16", "missingModules": [], "error": null, "checkedAt": "…|null",
+                       "segWorker": { "status": "healthy" | "restarting" | "down" | "disabled",
+                                      "heartbeatFresh": true, "lastHeartbeatAt": "…|null",
+                                      "restartsInWindow": 0, "lastError": null } }
+  },
+  "generatedAt": "…"
+}
+```
+- **`status` is always `"ok"` when the server answers.** It means "reachable", because PHC sync and the mobile app gate every upload on it. A down database or MATLAB session shows up under `components`, not here. A case that arrives while MATLAB is down is still stored, then graded or visibly failed by the queue.
+- **`db`:** `SELECT 1`, capped at 1 s.
+- **`matlabSession.status`:** the supervisor's value, the same one `GET /admin/system-health` reports. `heartbeatFresh` is the live reading, which is still meaningful when the supervisor is `disabled`.
+- **`python`:** the interpreter plus the modules the pipeline imports (`numpy`, `cv2`, `scipy`, `torch`, `timm`, `segmentation_models_pytorch`). The probe is cached and refreshed in the background at most once a minute, so `checkedAt` says how old the answer is. `"unknown"` means the first probe has not finished yet.
 
 ### `POST /api/v1/cases`
 Request: `multipart/form-data` with fields `patientId`, `phcId`, `captureIdRef`, `cameraDeviceId` (all strings), `image` (file), `questionnaireData` (JSON-stringified payload matching the patient questionnaire shape above), `captureMetadata` (JSON-stringified payload matching the capture-metadata shape above).
@@ -236,7 +265,9 @@ Response `201`: `{ "caseId": "a1b2c3d4-...", "receivedAt": "2026-09-06T09:15:00.
 
 A `201` means the case was **stored**, not that it was graded. **Since Task 8.3 grading is queued, so a case is always `"processing"` when the POST returns** — clients must poll `GET /api/v1/cases/:caseId/status` and must not treat the `201` as meaning a grade exists. If grading later fails, the case stays stored and its status becomes `"error"`.
 
-Errors: `400 image_required`, `400 invalid_image_type`, `400 invalid_json` (malformed `questionnaireData`/`captureMetadata`), `404 patient_not_found` (unknown patient and no demographics supplied), `413 image_too_large` (limit 25 MB).
+Optional, added 2026-09-26: `qualityGateEngine`, a JSON-stringified engine entry (`{ "engine": "matlab" | "python" | "js-fallback", "fallback": boolean, "detail": string|null }`) naming the engine that ran the PHC's quality gate on this capture. It is served back as `engineProvenance.qualityGate` on the case detail. The same optional field is accepted by `/cases/summary` and the chunk upload. If it is absent, it is stored as "not recorded", never assumed.
+
+Errors: `400 image_required`, `400 invalid_image_type`, `400 invalid_json` (malformed `questionnaireData`/`captureMetadata`/`qualityGateEngine`), `400 invalid_field` (`qualityGateEngine` is valid JSON but not an engine entry), `404 patient_not_found` (unknown patient and no demographics supplied), `413 image_too_large` (limit 25 MB).
 
 ### `POST /api/v1/cases/summary`  *(added 2026-09-20, design doc §10.1)*
 JSON body with the same fields as `POST /api/v1/cases` minus `image`. `captureIdRef` is **required** here: it is what the later image upload matches on.
@@ -259,7 +290,7 @@ Response `200`: `{ "caseId": "string", "status": "processing" | "graded" | "erro
 
 `"processing"` covers both *waiting for a worker* and *being graded*. That is deliberate: from outside they are the same fact — the answer is not ready, keep polling — and a fourth enum value would expose an internal distinction no client can act on. Both `"graded"` and `"error"` are terminal; nothing leaves either state without a new submission.
 
-**How long to expect:** about 21 s from upload to `"graded"` on the development machine, plus however long the case waited for a free worker — and roughly 40 s if the persistent MATLAB session or the segmentation worker is down, since the backend then falls back to starting them per case. Design a UI that polls, not one that blocks, and do not treat 60 s as abnormal.
+**How long to expect:** about 21 s from upload to `"graded"` on the development machine, plus however long the case waited for a free worker. It takes roughly 40 s if the Python segmentation worker is down, because the backend then starts segmentation per case. *(Corrected 2026-09-26)* If the persistent **MATLAB session** is down, the case does not quietly switch engines. It is retried, and if MATLAB is still down it ends in `"error"` (`failureCode` `matlab_session_unavailable` or `matlab_segmentation_failed`). The supervisor restarts the session and raises a System Health alert if that fails. Design a UI that polls, not one that blocks, and do not treat 60 s as abnormal.
 
 ### Chunked / resumable upload — `POST|GET /api/v1/cases/:captureRef/chunks…`  *(Task 8.2)*
 
@@ -365,9 +396,33 @@ That is deliberate and is not a placeholder. It never says "0 microaneurysms" �
 
 ### `GET /api/v1/cases/:caseId`: fields added 2026-09-20 (failures)
 - `status`: the case's own status (`processing` | `awaiting_image` | `graded` | `error`). It was missing from this response, which meant a failed case and a still-grading one looked identical: every ML field is `null` on both.
-- `failureCode`: why grading gave up, on an `error` case — e.g. `matlab_unavailable`, `python_unavailable`, `image_not_found`. `null` on every case that has not failed, and `not_recorded` never appears here (that grouping label is the admin health screen's, for the 62 cases that failed before the reason was stored).
+- `failureCode`: why grading gave up, on an `error` case — e.g. `matlab_unavailable`, `matlab_session_unavailable`, `matlab_segmentation_failed` *(2026-09-26)*, `python_unavailable`, `image_not_found`. `null` on every case that has not failed, and `not_recorded` never appears here (that grouping label is the admin health screen's, for the 62 cases that failed before the reason was stored).
 - `failedAt`: ISO-8601 timestamp of the moment it gave up, distinct from `receivedAt`.
 - The failure MESSAGE is deliberately not in this response. It can quote internal paths and library errors, so it is served only by `GET /admin/system-health`, to an admin.
+
+### `GET /api/v1/cases/:caseId`: field added 2026-09-26 (engine provenance)
+`engineProvenance`: which engine produced each ML output of this case. The standing rule is that every case records it and no engine switch is silent.
+```json
+"engineProvenance": {
+  "classifier":   { "engine": "matlab", "fallback": false,
+                    "detail": "MATLAB session (branchAInferMatlab.m); input tensor preprocessed in Python (preprocessBranchATensor.py)" },
+  "segmentation": {
+    "vessel":       { "engine": "matlab", "fallback": false, "detail": "MATLAB session forward pass (vessel_unet_v1)" },
+    "localization": { "engine": "matlab", "fallback": false, "detail": "MATLAB session forward pass (localization_v1)" },
+    "hardExudate":  { "engine": "matlab", "fallback": false, "detail": "MATLAB session forward pass (bright_lesion_unet_v1)" },
+    "redLesion":    { "engine": "python", "fallback": false, "detail": "PyTorch; not converted for MATLAB serving" }
+  },
+  "ruleEngine":   { "engine": "matlab", "fallback": false, "detail": "runCasePipeline.m in the persistent MATLAB session" },
+  "qualityGate":  { "engine": "matlab", "fallback": false, "detail": "qualityGateMain.m via matlab -batch" }
+}
+```
+- **Each entry** is `{ engine, fallback, detail }`, or `null`. `engine` is one of `"matlab" | "python" | "js-fallback"` and nothing else. `detail` is free text for a human, at most 300 characters. Do not parse it.
+- **`fallback: true`** means the output came from a non-primary engine because an explicit env flag allowed it: `MATLAB_ALLOW_FALLBACK`, `SEG_ALLOW_PYTHON_FALLBACK` or `QUALITY_GATE_ALLOW_FALLBACK`. Without the flag there is no fallback, and the case fails or is retried instead. A UI should make a `true` visible.
+- **`ruleEngine`** covers the whole per-case MATLAB call: the rule engine, branch agreement, camera check, NV score, lesion-attention score and evidence text. When the session could not take the request, `detail` says it ran through `matlab -batch`. The engine is still `matlab`.
+- **`null` means NOT RECORDED**, and is never a guess from the server's current configuration. The object itself is always present with all four keys.
+  - `classifier`, `segmentation` and `ruleEngine` are `null` on a case not graded yet, and on one graded before 2026-09-26.
+  - `segmentation` is `null` when segmentation did not run for this case. That is the same fact `lesionCounts: null` states. A single model inside it is `null` when segmentation did not report that model.
+  - `qualityGate` is `null` when the capturing client did not report it: older PHC builds, the mobile app for now, and captures replicated between peer devices.
 
 ### `GET /api/v1/admin/system-health`: fields added 2026-09-20
 - `failedCases`: cases that gave up, grouped by `failureCode`, each with `count`, `lastFailedAt`, an `exampleReason` and an `exampleCaseId`. Separate from `stuckJobs` on purpose — a stuck case may still recover on its own, a failed one needs a person.
