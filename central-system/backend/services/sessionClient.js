@@ -33,6 +33,17 @@ const path = require('path');
 const POLL_MS = 50;
 
 /**
+ * Synchronous on purpose. With the async fs.unlink the promise settled while
+ * the file was still there: a caller told "your request was taken back" could
+ * still find it in requests/ -- exactly the window in which a session that has
+ * just restarted picks it up and runs work nobody is waiting for
+ * (verify_backend_pipeline.js checks both files).
+ */
+function removeQuietly(p) {
+  try { fs.unlinkSync(p); } catch { /* already gone, or taken by the worker */ }
+}
+
+/**
  * createSessionClient({ dir, heartbeatFile, staleMs, label })
  *
  * `dir` holds requests/ and responses/; `heartbeatFile` is what the worker
@@ -79,10 +90,10 @@ function createSessionClient({ dir, heartbeatFile, staleMs = 30_000, label = 'wo
           try {
             body = JSON.parse(fs.readFileSync(respPath, 'utf8'));
           } catch (err) {
-            fs.unlink(respPath, () => {});
+            removeQuietly(respPath);
             return reject(new Error(`${label} response JSON parse failed: ${err.message}`));
           }
-          fs.unlink(respPath, () => {});
+          removeQuietly(respPath);
           if (body && body.error) return reject(new Error(body.error));
           return resolve(body);
         }
@@ -91,7 +102,7 @@ function createSessionClient({ dir, heartbeatFile, staleMs = 30_000, label = 'wo
           // Take the request back. Left behind, a worker that is merely slow
           // (or one that starts later) picks it up, runs work nobody is
           // waiting for, and leaves an orphan response file behind it.
-          fs.unlink(reqPath, () => {});
+          removeQuietly(reqPath);
           const err = new Error(`No response from the ${label} within ${timeoutMs}ms.`);
           err.code = 'session_timeout';
           return reject(err);
