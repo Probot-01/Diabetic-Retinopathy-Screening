@@ -1,6 +1,8 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { qualityReasonMessages } from '../../api/mockData';
+import { USE_MOCK_DATA } from '../../config';
+import { engineLabel } from '../../api/captureOptions';
 
 export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
   const { t } = useTranslation();
@@ -60,6 +62,41 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
           <div className="qrp-hero__sub">{statusCfg.sub}</div>
         </div>
       </div>
+
+      {/* ── Which engine produced this verdict (standing rule: no silent engine) ── */}
+      {(() => {
+        const engine = result.qualityGateEngine;
+        const isFallback = !!engine && engine.fallback;
+        return (
+          <div
+            className="qrp-card"
+            data-testid="quality-gate-engine"
+            style={{
+              display: 'flex', flexDirection: 'column', gap: 4,
+              border: isFallback ? '2px solid var(--c-warning, #D4860A)' : undefined,
+            }}
+          >
+            <div className="qrp-card__header-row">
+              <span className="qrp-label">QUALITY GATE ENGINE</span>
+              <span className="qrp-metric-num" style={{ fontFamily: 'var(--font-mono, monospace)' }}>
+                {USE_MOCK_DATA ? 'SIMULATED' : (engineLabel(engine) || 'NOT RECORDED')}
+              </span>
+            </div>
+            <div style={{ fontSize: 11, opacity: 0.75, fontFamily: 'var(--font-mono, monospace)' }}>
+              {USE_MOCK_DATA
+                ? 'DEMO DATA — no quality gate ran.'
+                : engine
+                  ? (engine.detail || '')
+                  : 'This capture carries no record of which engine checked it.'}
+            </div>
+            {isFallback && (
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-warning, #D4860A)' }}>
+                ⚠ FALLBACK ENGINE — not the reference MATLAB gate. Treat this verdict with care.
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ── 2. Quality Score Card (only when the gate reported one) ── */}
       {qualityScore != null && (
@@ -146,14 +183,21 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
           >
             <span style={{ marginRight: '6px' }}>↺</span> RETAKE IMAGE (RESOLVE DEFECT)
           </button>
-          <button
-            type="button"
-            className="btn btn--outline"
-            onClick={onAccept}
-            style={{ opacity: 0.5, fontSize: '10px', padding: '6px', borderStyle: 'dashed' }}
-          >
-            OVERRIDE QUALITY GATE & PROCEED ANYWAY
-          </button>
+          {/* Demo only. In live mode a 'retake' capture is never queued for upload
+              (only pass/borderline are), so "proceeding anyway" would collect the
+              questionnaires for an image that can never reach central -- a silent
+              dead end. The technician retakes; the ungradable path (§10.2) is not
+              built on the desktop yet. */}
+          {USE_MOCK_DATA && (
+            <button
+              type="button"
+              className="btn btn--outline"
+              onClick={onAccept}
+              style={{ opacity: 0.5, fontSize: '10px', padding: '6px', borderStyle: 'dashed' }}
+            >
+              OVERRIDE QUALITY GATE & PROCEED ANYWAY
+            </button>
+          )}
         </div>
       ) : (
         <div className="qrp-actions">

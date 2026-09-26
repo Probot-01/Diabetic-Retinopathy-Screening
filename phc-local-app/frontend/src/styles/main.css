@@ -2483,6 +2483,32 @@ body {
   color: rgba(44, 24, 16, 0.5);
 }
 
+/* A capture that needs someone's attention: a refusal from central, a failed
+   grade, a gate that could not run, a retake, a missing questionnaire. */
+.stage-badge--error {
+  color: var(--c-crimson);
+  font-weight: 700;
+}
+
+.stage-badge--blocked {
+  color: var(--c-warning);
+  font-weight: 700;
+}
+
+.stage-detail {
+  margin-top: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.35;
+  max-width: 360px;
+  color: var(--c-text-muted);
+  word-break: break-word;
+}
+
+.stage-detail--error {
+  color: var(--c-crimson);
+}
+
 /* ── Action Column Buttons (Disabling-with-Reason Uniform Styling) ── */
 .btn-action-col {
   min-width: 140px;

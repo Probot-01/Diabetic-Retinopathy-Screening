@@ -5,19 +5,17 @@ import { localApi } from '../../api/localApiClient';
 import { USE_MOCK_DATA } from '../../config';
 import { RetinalWaveCanvas } from '../shared/RetinalWaveCanvas';
 import { LoadError } from '../shared/LoadError';
+import { saveQuestionnaire } from '../../api/patientSession';
+import { BLOOD_PRESSURE } from '../../api/captureOptions';
 
 // Mock mode opens the form pre-filled with a clearly fictional patient for
 // rapid testing. Live mode opens it empty — and with consent NOT ticked: a
 // technician must record consent for the real person in front of them.
 const demo = (value, empty = '') => (USE_MOCK_DATA ? value : empty);
 
-/* ── tiny internal questionnaire ─────────────────────────── */
-const BLOOD_PRESSURE_OPTIONS = [
-  { value: 'normal',   label: 'Normal' },
-  { value: 'high',     label: 'High (Hypertension)' },
-  { value: 'low',      label: 'Low (Hypotension)' },
-  { value: 'unknown',  label: 'Unknown' },
-];
+/* ── questionnaire options: exactly the API's values (api-contracts.md) ── */
+// (The form used to offer "Low (Hypotension)", which the API does not accept.)
+const BLOOD_PRESSURE_OPTIONS = BLOOD_PRESSURE.map((o) => ({ value: o.id, label: o.label }));
 
 const EYE_SYMPTOMS = [
   { id: 'blurredVision',      label: 'BLURRED VISION' },
@@ -101,14 +99,20 @@ export const PatientRegistrationForm = () => {
   const [altPhone, setAltPhone] = useState(demo('+919811223344'));
 
   /* ── questionnaire ────────────────────────────────────── */
-  const [knownDiabetic, setKnownDiabetic] = useState(demo(true, false));
-  const [yearsSinceDx, setYearsSinceDx] = useState(demo('5to10', '1to5'));
-  const [glycemicControl, setGlycemicControl] = useState('moderate');
-  const [bloodPressure, setBloodPressure] = useState(demo('high', 'normal'));
-  const [pregnancy, setPregnancy] = useState('not_applicable');
+  // Live mode starts with NOTHING answered (null / ''): "no skip" means every
+  // question needs an answer the technician gave. A pre-selected 'moderate',
+  // 'normal' or 'not applicable' would be an answer nobody gave.
+  const [knownDiabetic, setKnownDiabetic] = useState(demo(true, null));
+  const [yearsSinceDx, setYearsSinceDx] = useState(demo('5to10', ''));
+  const [glycemicControl, setGlycemicControl] = useState(demo('moderate', ''));
+  const [bloodPressure, setBloodPressure] = useState(demo('high', ''));
+  const [pregnancy, setPregnancy] = useState(demo('not_applicable', ''));
   const [eyeSymptoms, setEyeSymptoms] = useState({
     blurredVision: demo(true, false), floaters: false, suddenVisionChange: false, eyePain: false,
   });
+  // Symptoms are yes/no each, so "none of these" must be tapped -- an untouched
+  // symptom list is not the same as "the patient has no symptoms".
+  const [noSymptoms, setNoSymptoms] = useState(false);
 
   /* ── consent ──────────────────────────────────────────── */
   const [consentObtained, setConsentObtained] = useState(demo(true, false));
@@ -118,6 +122,18 @@ export const PatientRegistrationForm = () => {
   const parsedAge = parseInt(age, 10);
   const couldBePregnant = !age || isNaN(parsedAge) || parsedAge < 55;
   const fullName = [firstName, middleName, lastName].filter(Boolean).join(' ');
+
+  // Every question answered? (Years since diagnosis is only asked of known
+  // diabetics; pregnancy only where it could apply.)
+  const symptomsAnswered = noSymptoms || Object.values(eyeSymptoms).some(Boolean);
+  const questionnaireMissing = [
+    knownDiabetic === null && 'known diabetic?',
+    knownDiabetic === true && !yearsSinceDx && 'years since diagnosis',
+    !glycemicControl && 'glycemic control',
+    !bloodPressure && 'blood pressure',
+    couldBePregnant && !pregnancy && 'pregnancy',
+    !symptomsAnswered && 'eye symptoms (or "none of these")',
+  ].filter(Boolean);
 
   /* auto-compute age from DOB */
   useEffect(() => {
@@ -130,8 +146,14 @@ export const PatientRegistrationForm = () => {
     if (computed > 0 && computed < 120) setAge(String(computed));
   }, [dob]);
 
-  const toggleSymptom = (id) =>
+  const toggleSymptom = (id) => {
+    setNoSymptoms(false);
     setEyeSymptoms(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+  const chooseNoSymptoms = () => {
+    setNoSymptoms(true);
+    setEyeSymptoms({ blurredVision: false, floaters: false, suddenVisionChange: false, eyePain: false });
+  };
 
   const handleConsentChange = (e) => {
     const checked = e.target.checked;
@@ -145,8 +167,8 @@ export const PatientRegistrationForm = () => {
     setGender(''); setDob(''); setAge(''); setMaritalStatus(''); setBloodGroup('Unknown');
     setAddress(''); setState(''); setPincode(''); setDistrict('');
     setOccupation(''); setContactNumber(''); setAltPhone('');
-    setKnownDiabetic(false); setYearsSinceDx('1to5'); setGlycemicControl('moderate');
-    setBloodPressure('normal'); setPregnancy('not_applicable');
+    setKnownDiabetic(null); setYearsSinceDx(''); setGlycemicControl('');
+    setBloodPressure(''); setPregnancy(''); setNoSymptoms(false);
     setEyeSymptoms({ blurredVision: false, floaters: false, suddenVisionChange: false, eyePain: false });
     setConsentObtained(false); setConsentGivenAt(null);
   };
@@ -155,6 +177,10 @@ export const PatientRegistrationForm = () => {
     e.preventDefault();
     if (!consentObtained) {
       alert('Informed verbal consent is required before initiating screening.');
+      return;
+    }
+    if (!USE_MOCK_DATA && questionnaireMissing.length) {
+      setSubmitError({ message: 'Answer every question before capture: ' + questionnaireMissing.join(', ') + '.' });
       return;
     }
     setLoading(true);
@@ -171,13 +197,22 @@ export const PatientRegistrationForm = () => {
         gender, dob, maritalStatus, bloodGroup,
         address, state, pincode, district, occupation, altPhone,
         questionnaire: {
-          knownDiabetic, yearsSinceDiagnosis: yearsSinceDx,
-          glycemicControl, bloodPressure, pregnancy,
+          knownDiabetic,
+          // The API has no "not diabetic" value for this question and requires
+          // one of the four buckets. For a patient who is not a known diabetic
+          // it is recorded as '< 1 yr' -- and the form says so on screen; it is
+          // never quietly a leftover default.
+          yearsSinceDiagnosis: knownDiabetic ? yearsSinceDx : 'lt1',
+          glycemicControl, bloodPressure,
+          // Not asked (and sent as null) where pregnancy cannot apply.
+          pregnancy: couldBePregnant ? pregnancy : 'not_applicable',
           ...eyeSymptoms,
         },
         consentGivenAt: consentGivenAt || new Date().toISOString(),
       };
       const newPatient = await localApi.registerPatient(payload);
+      // Kept PER PATIENT for the capture screen to attach to each capture.
+      saveQuestionnaire(newPatient.patientId, payload.questionnaire);
       try {
         localStorage.setItem('netra_latest_patient', JSON.stringify({ ...newPatient, ...payload }));
         const existing = JSON.parse(localStorage.getItem('netra_registered_patients') || '[]');
@@ -354,27 +389,28 @@ export const PatientRegistrationForm = () => {
 
         <div className="reg-questionnaire-card">
 
-          {/* Known Diabetic */}
-          <div className="reg-q-row reg-q-row--inline">
-            <span className="meta-label">KNOWN DIABETIC?</span>
-            <div
-              className={`meta-toggle ${knownDiabetic ? 'meta-toggle--active' : ''}`}
-              onClick={() => setKnownDiabetic(v => !v)}
-              role="switch"
-              aria-checked={knownDiabetic}
-              tabIndex={0}
-              onKeyDown={e => e.key === ' ' && setKnownDiabetic(v => !v)}
-            >
-              <div className="meta-toggle__track">
-                <div className="meta-toggle__thumb" />
-              </div>
+          {/* Known Diabetic -- an explicit YES / NO, not a toggle that starts on an answer */}
+          <div className="reg-q-row">
+            <span className="meta-label">KNOWN DIABETIC? <span className="reg-req">*</span></span>
+            <div className="reg-chip-group">
+              {[{ v: true, label: 'YES' }, { v: false, label: 'NO' }].map((o) => (
+                <button key={o.label} type="button"
+                  className={`reg-chip${knownDiabetic === o.v ? ' reg-chip--active' : ''}`}
+                  onClick={() => setKnownDiabetic(o.v)}
+                >{o.label}</button>
+              ))}
             </div>
+            {knownDiabetic === false && (
+              <div className="t-mono" style={{ fontSize: 11, opacity: 0.8, marginTop: 6 }}>
+                The record has no "not diabetic" value for years since diagnosis; it will be stored as "&lt; 1 yr".
+              </div>
+            )}
           </div>
 
           {/* Years Since Diagnosis (conditional) */}
           {knownDiabetic && (
             <div className="reg-q-row">
-              <span className="meta-label">YEARS SINCE DIAGNOSIS</span>
+              <span className="meta-label">YEARS SINCE DIAGNOSIS <span className="reg-req">*</span></span>
               <div className="reg-chip-group">
                 {[
                   { id: 'lt1',   label: '< 1 YR'    },
@@ -393,7 +429,7 @@ export const PatientRegistrationForm = () => {
 
           {/* Glycemic Control */}
           <div className="reg-q-row">
-            <span className="meta-label">GLYCEMIC CONTROL (BLOOD SUGAR)</span>
+            <span className="meta-label">GLYCEMIC CONTROL (BLOOD SUGAR) <span className="reg-req">*</span></span>
             <div className="reg-chip-group">
               {[
                 { id: 'good',     label: 'GOOD'     },
@@ -410,10 +446,11 @@ export const PatientRegistrationForm = () => {
 
           {/* Blood Pressure */}
           <div className="reg-q-row">
-            <span className="meta-label">BLOOD PRESSURE STATUS</span>
+            <span className="meta-label">BLOOD PRESSURE STATUS <span className="reg-req">*</span></span>
             <select className="select meta-select"
               value={bloodPressure}
               onChange={e => setBloodPressure(e.target.value)}>
+              <option value="" disabled>SELECT…</option>
               {BLOOD_PRESSURE_OPTIONS.map(o => (
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
@@ -423,7 +460,7 @@ export const PatientRegistrationForm = () => {
           {/* Pregnancy */}
           {couldBePregnant && (
             <div className="reg-q-row">
-              <span className="meta-label">CURRENTLY PREGNANT?</span>
+              <span className="meta-label">CURRENTLY PREGNANT? <span className="reg-req">*</span></span>
               <div className="reg-chip-group">
                 {[
                   { id: 'yes',            label: 'YES' },
@@ -441,7 +478,7 @@ export const PatientRegistrationForm = () => {
 
           {/* Eye Symptoms */}
           <div className="reg-q-row">
-            <span className="meta-label">CURRENT EYE SYMPTOMS (SELECT ALL THAT APPLY)</span>
+            <span className="meta-label">CURRENT EYE SYMPTOMS (SELECT ALL THAT APPLY) <span className="reg-req">*</span></span>
             <div className="reg-chip-group reg-chip-group--grid">
               {EYE_SYMPTOMS.map(sym => (
                 <button key={sym.id} type="button"
@@ -452,6 +489,13 @@ export const PatientRegistrationForm = () => {
                   {sym.label}
                 </button>
               ))}
+              <button type="button"
+                className={`reg-chip${noSymptoms ? ' reg-chip--active' : ''}`}
+                onClick={chooseNoSymptoms}
+              >
+                {noSymptoms && <span className="reg-chip__check">✓ </span>}
+                NONE OF THESE
+              </button>
             </div>
           </div>
         </div>
@@ -477,6 +521,12 @@ export const PatientRegistrationForm = () => {
         </div>
 
         {/* ── 5. FOOTER ACTIONS ───────────────────────────── */}
+        {!USE_MOCK_DATA && questionnaireMissing.length > 0 && (
+          <div className="t-mono" data-testid="questionnaire-missing"
+            style={{ fontSize: 12, color: 'var(--c-crimson, #C42B2B)', margin: '8px 0' }}>
+            Still to answer before capture: {questionnaireMissing.join(' · ')}
+          </div>
+        )}
         {submitError && <LoadError error={submitError} title="PATIENT NOT REGISTERED" compact />}
         <div className="reg-footer">
           <button type="button" className="btn btn--outline" onClick={handleClearAll}>
@@ -485,7 +535,10 @@ export const PatientRegistrationForm = () => {
           <button
             type="submit"
             className="btn btn--lg"
-            disabled={loading || !consentObtained || !firstName || !contactNumber}
+            disabled={loading || !consentObtained || !firstName || !contactNumber
+              || (!USE_MOCK_DATA && questionnaireMissing.length > 0)}
+            title={!USE_MOCK_DATA && questionnaireMissing.length
+              ? 'Still to answer: ' + questionnaireMissing.join(', ') : undefined}
           >
             <span>{loading ? 'REGISTERING...' : 'INITIATE CAPTURE →'}</span>
           </button>
