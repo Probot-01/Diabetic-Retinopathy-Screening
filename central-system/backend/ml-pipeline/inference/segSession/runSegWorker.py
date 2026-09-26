@@ -76,9 +76,17 @@ HEARTBEAT_SECONDS = 5
 # start die with KeyError, so every case paid the per-case segInfer.py spawn.
 # M5's role follows RED_LESION_MODEL_VERSION, so the model a case will use is
 # the one loaded up front.
+#
+# Only roles that will actually run in PyTorch are preloaded: a MATLAB-served
+# role (SEG_INFERENCE_BACKEND=matlab) needs its PyTorch copy only when
+# SEG_ALLOW_PYTHON_FALLBACK=1 lets segInfer fall back to it. segInfer.load() is
+# itself lazy, so this decides what is resident, never which engine runs.
 def _roles(seg):
     red = "red_lesion_v2" if seg.RED_LESION_MODEL_VERSION == "v2" else "red_lesion"
-    return ("vessel", "localization", "hard_exudate", red)
+    all_roles = ("vessel", "localization", "hard_exudate", red)
+    return tuple(r for r in all_roles
+                 if seg.SEG_BACKEND != "matlab" or r not in seg._MATLAB_NETS
+                 or seg.SEG_ALLOW_PYTHON_FALLBACK)
 
 
 def log(msg):
@@ -136,9 +144,13 @@ def main():
         if os.path.exists(stale):
             os.remove(stale)
 
-    log("worker starting -- loading M2-M5")
+    log("worker starting")
     import segInfer
-    for role in _roles(segInfer):
+    roles = _roles(segInfer)
+    log(f"preloading PyTorch models: {', '.join(roles) or 'none'} "
+        f"(SEG_INFERENCE_BACKEND={segInfer.SEG_BACKEND}, "
+        f"fallback={'on' if segInfer.SEG_ALLOW_PYTHON_FALLBACK else 'off'})")
+    for role in roles:
         segInfer.load(role)
         log(f"  loaded {role}")
     log(f"worker ready, polling for requests (backend: {segInfer.SEG_BACKEND})")
