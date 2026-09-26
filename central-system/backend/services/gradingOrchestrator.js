@@ -65,6 +65,7 @@ const matlabFallback = require('./matlabFallback');
 const matlabSession  = require('./matlabSessionClient');
 const segSession     = require('./segSessionClient');
 const { cameraNotValidated: isCameraNotValidated } = require('./validatedCameras');
+const { engineEntry, normaliseEngineEntry } = require('./engineProvenance');
 
 // Task: MATLAB workaround for a dev machine with no MATLAB install (no
 // license, no disk space). When true, MATLAB genuinely failing to SPAWN
@@ -787,14 +788,18 @@ async function gradeCase(caseId, plainImagePath) {
   }
 
   let mlResult;
+  // How the MATLAB per-case pipeline actually ran ('session' | 'batch'), or
+  // 'js-fallback' -- recorded as the rule engine's provenance below.
+  const casePipelineRun = { via: null };
   try {
     mlResult = await runCasePipelineMatlab(
       buildCasePipelineInput(imagePath, cameraDeviceId, caseId, segResult,
                              branchA.drGradeCnn, branchA.gradcamMap,
                              caseClinicalInputs(caseRow.patient_age, caseRow.questionnaire_data)),
-      caseId);
+      caseId, casePipelineRun);
   } catch (err) {
     if (ALLOW_MATLAB_FALLBACK && err.code === 'matlab_unavailable') {
+      casePipelineRun.via = 'js-fallback';
       console.warn(`[gradingOrchestrator] case ${caseId}: MATLAB is not installed on `
         + 'this machine — using the JS fallback (matlabFallback.js) for Branch B / '
         + 'evidence report / camera check. On a machine with MATLAB this code path '
@@ -1036,14 +1041,22 @@ async function gradeCase(caseId, plainImagePath) {
       + `MC-dropout failed: ${branchA.uncertaintyError}`);
   }
 
+  // WHICH ENGINE produced each ML output (standing rule: every case records
+  // it; no silent engine fallback). The quality gate's is not here: it ran at
+  // the PHC and arrived with the case (cases.quality_gate_engine).
+  const engineProvenance = buildEngineProvenance({
+    inferenceBackend: INFERENCE_BACKEND, segResult, casePipelineVia: casePipelineRun.via,
+  });
+
   await pool.query(`
     INSERT INTO grading_results
       (case_id, dr_grade_cnn, referable, confidence_score,
        conformal_tier, model_version, graded_at,
        dr_grade_rule_engine, branch_agreement, uncertainty_score, tier_reason,
-       urgency_score, urgency_factor, urgency_inputs)
-    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10, $11, $12, $13)
+       urgency_score, urgency_factor, urgency_inputs, engine_provenance)
+    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10, $11, $12, $13, $14)
     ON CONFLICT (case_id) DO UPDATE SET
+      engine_provenance    = EXCLUDED.engine_provenance,
       dr_grade_cnn         = EXCLUDED.dr_grade_cnn,
       referable            = EXCLUDED.referable,
       confidence_score     = EXCLUDED.confidence_score,
@@ -1059,7 +1072,7 @@ async function gradeCase(caseId, plainImagePath) {
       urgency_inputs       = EXCLUDED.urgency_inputs
   `, [caseId, grade, referable, confidenceScore, tier, modelVersion,
       ruleEngineGrade, branchAgreement, uncertaintyScore, tierReason ?? null,
-      urgency.score, urgency.factor, urgency.inputs]);
+      urgency.score, urgency.factor, urgency.inputs, engineProvenance]);
 
   // ── Step 4: INSERT INTO explainability_outputs ─────────────────────────────
   // vessel_mask_path, lesion_red_path, lesion_bright_path stay NULL (Phase 3).
@@ -1475,18 +1488,25 @@ function casePipelineBatchExpr(inputPath) {
 }
 
 /**
- * runCasePipelineMatlab(input, caseId) -> the parsed, §Q-normalised result.
+ * runCasePipelineMatlab(input, caseId, run) -> the parsed, §Q-normalised result.
+ *
+ * `run.via` is set to how it actually ran -- 'session' or 'batch' -- for the
+ * case's engine provenance. Both are MATLAB; the difference is recorded
+ * because a case that paid a cold `matlab -batch` start is worth being able
+ * to find.
  */
-async function runCasePipelineMatlab(input, caseId) {
+async function runCasePipelineMatlab(input, caseId, run = {}) {
   const inputPath = path.join(os.tmpdir(),
     `case_pipeline_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
   fs.writeFileSync(inputPath, JSON.stringify(input));
   try {
     if (matlabSession.alive()) {
       try {
-        return fromMatlabDeep(await matlabSession.call(
+        const viaSession = fromMatlabDeep(await matlabSession.call(
           { casePipeline: inputPath.replace(/\\/g, '/') },
           { timeoutMs: CASE_PIPELINE_TIMEOUT_MS, prefix: 'case' }));
+        run.via = 'session';
+        return viaSession;
       } catch (err) {
         console.warn(`[gradingOrchestrator] case ${caseId}: the MATLAB session could not `
           + `run the grading pipeline (${err.message}); falling back to matlab -batch, `
@@ -1494,6 +1514,7 @@ async function runCasePipelineMatlab(input, caseId) {
       }
     }
     const raw = await spawnMatlabBatch(casePipelineBatchExpr(inputPath));
+    run.via = 'batch';
     // MATLAB start-up text can precede the JSON on stdout.
     const jsonStart = raw.indexOf('{');
     if (jsonStart === -1) throw new Error(`No JSON in MATLAB output.\nRaw:\n${raw}`);
@@ -1510,6 +1531,42 @@ async function runCasePipelineMatlab(input, caseId) {
   }
 }
 
+// ── Engine provenance (entry shape and rules: services/engineProvenance.js) ──
+/**
+ * buildEngineProvenance({ inferenceBackend, segResult, casePipelineVia })
+ *   -> { classifier, segmentation, ruleEngine }
+ *
+ * segmentation is null when it did not run; each of its four models is
+ * whatever segInfer reported in its `engines` block.
+ */
+function buildEngineProvenance({ inferenceBackend, segResult, casePipelineVia }) {
+  const classifier = inferenceBackend === 'matlab'
+    ? engineEntry('matlab', 'MATLAB session (branchAInferMatlab.m); input tensor '
+      + 'preprocessed in Python (preprocessBranchATensor.py)')
+    : engineEntry('python', 'branchAInfer.py (INFERENCE_BACKEND=python)');
+
+  let segmentation = null;
+  if (segResult) {
+    const e = segResult.engines || {};
+    segmentation = {
+      vessel:       normaliseEngineEntry(e.vessel),
+      localization: normaliseEngineEntry(e.localization),
+      hardExudate:  normaliseEngineEntry(e.hardExudate),
+      redLesion:    normaliseEngineEntry(e.redLesion),
+    };
+  }
+
+  const ruleEngine = {
+    session: engineEntry('matlab', 'runCasePipeline.m in the persistent MATLAB session'),
+    batch: engineEntry('matlab', 'runCasePipeline.m via a fresh matlab -batch '
+      + '(the session could not take the request)'),
+    'js-fallback': engineEntry('js-fallback',
+      'matlabFallback.js -- MATLAB not installed, MATLAB_ALLOW_FALLBACK=1', true),
+  }[casePipelineVia] || null;
+
+  return { classifier, segmentation, ruleEngine };
+}
+
 // buildCasePipelineInput is exported for testing: asserting on the INPUT it
 // actually produces is a real check, whereas grepping this file's source is
 // not -- a comment quoting an old field would fail such a grep while the
@@ -1519,5 +1576,5 @@ module.exports = {
   caseClinicalInputs,
   runBranchAInference, runBranchAInferenceMatlab, INFERENCE_BACKEND,
   isCaptureUngradable, hasClearedCameraSiteProbation, CAMERA_PROBATION_MIN_CASES,
-  segment,
+  segment, buildEngineProvenance,
 };
