@@ -19,6 +19,8 @@
 Kept because this file is the tie-breaker: when it changes, the code and both
 plans have to be re-checked against it, and a silent edit makes that impossible.
 
+**2026-09-26 (later) — Quality-gate engine value `js-device`.** `qualityGateEngine` and `engineProvenance.qualityGate` may now also be `"js-device"`. It means the mobile app's on-device TypeScript port of `qualityGateMain.m`, which is that client's primary gate, so `fallback` is `false`. It is valid only for the quality gate. Classifier, segmentation and rule-engine entries stay `"matlab" | "python" | "js-fallback"`. The backend accepts it now; the mobile app starts sending it separately.
+
 **2026-09-26 — Engine provenance, component health, no silent segmentation fallback.**
 - **`GET /api/v1/cases/:caseId` gains `engineProvenance`**: which engine (`matlab` | `python` | `js-fallback`) produced the classifier grade, each segmentation model, the rule engine and the PHC quality gate. The shape and its null rules are under the case-detail section below. Additive. No UI shows it yet; a later session adds it to Case Detail.
 - **`POST /api/v1/cases`, `/cases/summary` and the chunk upload accept an optional `qualityGateEngine`**: a JSON-stringified engine entry for the PHC's quality gate. A malformed value returns `400 invalid_field`. If it is absent, it is stored as "not recorded". The PHC desktop backend sends it from this date. The Expo mobile app does not send it yet.
@@ -265,7 +267,7 @@ Response `201`: `{ "caseId": "a1b2c3d4-...", "receivedAt": "2026-09-06T09:15:00.
 
 A `201` means the case was **stored**, not that it was graded. **Since Task 8.3 grading is queued, so a case is always `"processing"` when the POST returns** — clients must poll `GET /api/v1/cases/:caseId/status` and must not treat the `201` as meaning a grade exists. If grading later fails, the case stays stored and its status becomes `"error"`.
 
-Optional, added 2026-09-26: `qualityGateEngine`, a JSON-stringified engine entry (`{ "engine": "matlab" | "python" | "js-fallback", "fallback": boolean, "detail": string|null }`) naming the engine that ran the PHC's quality gate on this capture. It is served back as `engineProvenance.qualityGate` on the case detail. The same optional field is accepted by `/cases/summary` and the chunk upload. If it is absent, it is stored as "not recorded", never assumed.
+Optional, added 2026-09-26: `qualityGateEngine`, a JSON-stringified engine entry (`{ "engine": "matlab" | "python" | "js-fallback" | "js-device", "fallback": boolean, "detail": string|null }`; `js-device` = the mobile on-device gate) naming the engine that ran the PHC's quality gate on this capture. It is served back as `engineProvenance.qualityGate` on the case detail. The same optional field is accepted by `/cases/summary` and the chunk upload. If it is absent, it is stored as "not recorded", never assumed.
 
 Errors: `400 image_required`, `400 invalid_image_type`, `400 invalid_json` (malformed `questionnaireData`/`captureMetadata`/`qualityGateEngine`), `400 invalid_field` (`qualityGateEngine` is valid JSON but not an engine entry), `404 patient_not_found` (unknown patient and no demographics supplied), `413 image_too_large` (limit 25 MB).
 
@@ -416,7 +418,7 @@ That is deliberate and is not a placeholder. It never says "0 microaneurysms" �
   "qualityGate":  { "engine": "matlab", "fallback": false, "detail": "qualityGateMain.m via matlab -batch" }
 }
 ```
-- **Each entry** is `{ engine, fallback, detail }`, or `null`. `engine` is one of `"matlab" | "python" | "js-fallback"` and nothing else. `detail` is free text for a human, at most 300 characters. Do not parse it.
+- **Each entry** is `{ engine, fallback, detail }`, or `null`. `engine` is one of `"matlab" | "python" | "js-fallback"` and nothing else, except that `qualityGate` may also be `"js-device"` (the mobile on-device gate; *2026-09-26*). `detail` is free text for a human, at most 300 characters. Do not parse it.
 - **`fallback: true`** means the output came from a non-primary engine because an explicit env flag allowed it: `MATLAB_ALLOW_FALLBACK`, `SEG_ALLOW_PYTHON_FALLBACK` or `QUALITY_GATE_ALLOW_FALLBACK`. Without the flag there is no fallback, and the case fails or is retried instead. A UI should make a `true` visible.
 - **`ruleEngine`** covers the whole per-case MATLAB call: the rule engine, branch agreement, camera check, NV score, lesion-attention score and evidence text. When the session could not take the request, `detail` says it ran through `matlab -batch`. The engine is still `matlab`.
 - **`null` means NOT RECORDED**, and is never a guess from the server's current configuration. The object itself is always present with all four keys.

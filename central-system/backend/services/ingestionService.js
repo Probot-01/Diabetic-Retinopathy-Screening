@@ -127,10 +127,10 @@ async function ensurePatientReference(client, patientId) {
 function readQualityGateEngine(value) {
   const raw = parseJsonField(value, 'qualityGateEngine');
   if (raw === null) return null;
-  const entry = engineProvenance.normaliseEngineEntry(raw);
+  const entry = engineProvenance.normaliseEngineEntry(raw, engineProvenance.QUALITY_GATE_ENGINES);
   if (!entry) {
     throw badRequest('invalid_field', 'qualityGateEngine must be '
-      + '{ "engine": "matlab" | "python" | "js-fallback", "fallback": boolean, "detail": string|null }.');
+      + '{ "engine": "matlab" | "python" | "js-fallback" | "js-device", "fallback": boolean, "detail": string|null }.');
   }
   return entry;
 }

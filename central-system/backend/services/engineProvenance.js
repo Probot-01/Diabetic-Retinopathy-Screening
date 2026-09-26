@@ -7,7 +7,8 @@
  * output -- matlab / python / js-fallback -- and no engine switch is silent.
  *
  * One entry per output: { engine, fallback, detail }
- *   engine    'matlab' | 'python' | 'js-fallback'
+ *   engine    'matlab' | 'python' | 'js-fallback'; the quality gate may also
+ *             be 'js-device' (mobile on-device gate)
  *   fallback  true only when the output came from a NON-primary engine because
  *             an explicit env flag allowed it (MATLAB_ALLOW_FALLBACK,
  *             SEG_ALLOW_PYTHON_FALLBACK, QUALITY_GATE_ALLOW_FALLBACK). Without
@@ -23,15 +24,22 @@
  */
 
 const ENGINES = new Set(['matlab', 'python', 'js-fallback']);
+// The quality gate alone may also be 'js-device': the mobile app's on-device
+// TypeScript port of qualityGateMain.m, which is that client's PRIMARY gate --
+// not a fallback, so it is not 'js-fallback'. Never valid for a grading output.
+const QUALITY_GATE_ENGINES = new Set([...ENGINES, 'js-device']);
 const DETAIL_MAX = 300;
 
 function engineEntry(engine, detail, fallback = false) {
   return { engine, fallback: !!fallback, detail: detail ?? null };
 }
 
-/** A reported entry made safe to store and serve, or null when it is not one. */
-function normaliseEngineEntry(e) {
-  if (!e || typeof e !== 'object' || !ENGINES.has(e.engine)) return null;
+/**
+ * A reported entry made safe to store and serve, or null when it is not one.
+ * `allowed` is the engine set for that output (default: the grading outputs').
+ */
+function normaliseEngineEntry(e, allowed = ENGINES) {
+  if (!e || typeof e !== 'object' || !allowed.has(e.engine)) return null;
   return engineEntry(e.engine,
     typeof e.detail === 'string' ? e.detail.slice(0, DETAIL_MAX) : null,
     e.fallback === true);
@@ -57,10 +65,10 @@ function toContractShape(gradingProvenance, qualityGateEngine) {
     classifier:   normaliseEngineEntry(g.classifier),
     segmentation,
     ruleEngine:   normaliseEngineEntry(g.ruleEngine),
-    qualityGate:  normaliseEngineEntry(qualityGateEngine),
+    qualityGate:  normaliseEngineEntry(qualityGateEngine, QUALITY_GATE_ENGINES),
   };
 }
 
 module.exports = {
-  ENGINES, SEGMENTATION_MODELS, engineEntry, normaliseEngineEntry, toContractShape,
+  ENGINES, QUALITY_GATE_ENGINES, SEGMENTATION_MODELS, engineEntry, normaliseEngineEntry, toContractShape,
 };
