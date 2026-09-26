@@ -70,7 +70,15 @@ HEARTBEAT = os.path.join(HERE, "worker.heartbeat")
 POLL_INTERVAL_SECONDS = 0.05
 HEARTBEAT_SECONDS = 5
 
-ROLES = ("vessel", "localization", "bright_lesion", "red_lesion")
+# segInfer's role names, which are NOT the checkpoint filenames: M4's role is
+# "hard_exudate" since the GATE 4 rename (its file is still
+# bright_lesion_unet_v1.pt). The old "bright_lesion" here made every worker
+# start die with KeyError, so every case paid the per-case segInfer.py spawn.
+# M5's role follows RED_LESION_MODEL_VERSION, so the model a case will use is
+# the one loaded up front.
+def _roles(seg):
+    red = "red_lesion_v2" if seg.RED_LESION_MODEL_VERSION == "v2" else "red_lesion"
+    return ("vessel", "localization", "hard_exudate", red)
 
 
 def log(msg):
@@ -124,7 +132,7 @@ def main():
 
     log("worker starting -- loading M2-M5")
     import segInfer
-    for role in ROLES:
+    for role in _roles(segInfer):
         segInfer.load(role)
         log(f"  loaded {role}")
     log(f"worker ready, polling for requests (backend: {segInfer.SEG_BACKEND})")
