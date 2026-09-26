@@ -10,8 +10,10 @@ marked **not verified**.
 
 Rule of thumb: the central grading server needs **both** MATLAB and Python,
 whichever engine a model runs on. The MATLAB classifier path still preprocesses
-its input in Python, loads a PyTorch checkpoint for that step on every case,
-and the red-lesion model (M5) has no MATLAB conversion.
+its input in Python, and the red-lesion model (M5) has no MATLAB conversion.
+The preprocessing step reads four metadata fields from the classifier's
+PyTorch checkpoint. Since the later 2026-09-26 update they are cached on disk,
+so torch is no longer imported per case.
 
 ---
 
@@ -94,23 +96,24 @@ Every graded case stores this per output as `engineProvenance` (see
 
 | Measurement | Value |
 |---|---|
-| `MATLAB.exe` private bytes, session serving live cases (all 5 networks + `branchA_v2c` loaded, after grading a case) | **≈ 2.2 GB** (2,216 MB and 2,228 MB on two runs) |
-| `MATLAB.exe` working set, same | ≈ 2.26 GB |
+| `MATLAB.exe` private bytes, session serving live cases, **after lazy loading** (M2–M4 + `branchA_v2c`, after grading a case) | **≈ 2.1 GB** (2,088 MB) |
+| `MATLAB.exe` working set, same | ≈ 2.1 GB (2,107 MB) |
+| Before lazy loading (all 5 networks + `branchA_v2c`) | 2,216 MB and 2,228 MB private on two runs |
 | `memory().MemUsedMATLAB` in a batch process: before loading, then with the same networks loaded after one run of each entry point | 1.5 GB → **3.0 GB** |
 | `matlab.exe` launcher process | ≈ 11 MB |
 
-The session loads **five** networks at start (`runMatlabInferenceSession.m`,
-`netFiles`), and `branchAInferMatlab.m` separately keeps `branchA_v2c` (the
-model actually used). Two of the five are never served:
-- `branchA_v1`: the classifier default is `branchA_v2c`.
-- `red_lesion_unet_v1`: M5 is v2, and v2 has no MATLAB conversion.
+**Lazy loading (later 2026-09-26).** The session loads only what its configured
+backends need:
+- M2–M4 when `SEG_INFERENCE_BACKEND=matlab`.
+- The classifier, through `branchAInferMatlab.m`'s warm-up, when
+  `INFERENCE_BACKEND=matlab`.
 
-Dropping those two loads would save their memory (about 106 MB on disk) and
-some start-up time. That is a decision for Tanuj; this session did not change
-it.
+It no longer loads the never-served `branchA_v1` and `red_lesion_unet_v1`.
+The saving measured about 130 MB private.
 
-Start-up: the heartbeat appears about 60 s after launch on this machine,
-including the five loads (about 25 s) and a warm-up inference. The supervisor
+Start-up: the heartbeat appears within about a minute of launch on this
+machine, including the three network loads (about 17 s) and a warm-up
+inference. The supervisor
 allows 240 s by default (`MATLAB_STARTUP_GRACE_MS`).
 
 ## 3. Python
@@ -163,14 +166,13 @@ Notes for the deployment image:
 
 | Process | Private bytes |
 |---|---|
-| Persistent segmentation worker (`segSession/runSegWorker.py`), after serving cases | **≈ 2.0 GB** (2,021 MB) |
+| Persistent segmentation worker (`segSession/runSegWorker.py`), after serving a case, **after lazy loading** | **≈ 1.0 GB** (1,032 MB) |
+| Same, before lazy loading (all four PyTorch models preloaded) | 2,021 MB |
 | Per-case `preprocessBranchATensor.py` (short-lived, one per case) | not measured separately |
 
-The worker preloads all four segmentation checkpoints in PyTorch
-(`runSegWorker.py` `_roles`). That includes the three that the MATLAB session
-actually serves, which are only needed if `SEG_ALLOW_PYTHON_FALLBACK=1` or
-`SEG_INFERENCE_BACKEND=python`. Not preloading them is a possible saving.
-**Not changed.**
+The worker preloads a PyTorch copy only for the roles that will run in PyTorch
+(`runSegWorker.py` `_roles`). With the defaults that is M5 alone. M2–M4 are
+added only with `SEG_INFERENCE_BACKEND=python` or `SEG_ALLOW_PYTHON_FALLBACK=1`.
 
 ## 4. Model files read at runtime
 
@@ -187,17 +189,16 @@ package folders are tracked.
 | `vessel_unet_v1.mat` + `+vessel_unet_v1/` (27 files) | 90,954,651 B | ONNX-imported network | **yes**: M2 forward pass |
 | `localization_v1.mat` + `+localization_v1/` (27 files) | 53,338,371 B | ONNX-imported network | **yes**: M3 |
 | `bright_lesion_unet_v1.mat` + `+bright_lesion_unet_v1/` (27 files) | 91,003,465 B | ONNX-imported network | **yes**: M4 |
-| `branchA_v1.mat` + `+branchA_v1/` | 15,008,528 B | ONNX-imported network | **loaded, never served** |
-| `red_lesion_unet_v1.mat` + `+red_lesion_unet_v1/` | 91,077,264 B | ONNX-imported network (old 2-class M5) | **loaded, never served** |
+| `branchA_v1.mat`, `red_lesion_unet_v1.mat` | 15 MB, 91 MB | ONNX-imported networks | **no longer loaded** (lazy loading) |
 
 ### Python
 
 | File | Size | Format | Used? |
 |---|---|---|---|
-| `Model1/v2c/branchA_v2c.pt` | 16,365,355 B | PyTorch checkpoint | **yes, on every case**: `preprocessBranchATensor.py` → `branchAInfer.load_checkpoint()` reads its preprocessing metadata. It is also the model when `INFERENCE_BACKEND=python`. |
+| `Model1/v2c/branchA_v2c.pt` | 16,365,355 B | PyTorch checkpoint | **yes, but no longer per case**: `preprocessBranchATensor.py` reads its four preprocessing fields through `branchAInfer.load_preprocess_meta()`. That caches them in `%TEMP%\netrasetu_branchA_v2c_preprocess_meta.json`, keyed by path, size, mtime and version. Per-case preprocessing went from 2.96 s to 0.79 s. It is also the model when `INFERENCE_BACKEND=python`. |
 | `red_lesion_unet_v2.pt` | 97,924,708 B | PyTorch checkpoint (3-class U-Net) | **yes**: M5 |
 | `red_lesion_v2_config.json` | 2.1 KB | JSON (MA/HE area floors) | **yes** |
-| `vessel_predictions(Model2)/vessel_unet_v1.pt` | 97,896,252 B | PyTorch checkpoint | preloaded by the worker; used only on the Python seg path |
+| `vessel_predictions(Model2)/vessel_unet_v1.pt` | 97,896,252 B | PyTorch checkpoint | loaded only on the Python seg path or with `SEG_ALLOW_PYTHON_FALLBACK=1` |
 | `Model3/localization_v1.pt` | 57,426,675 B | PyTorch checkpoint | same |
 | `Model4/bright_lesion_unet_v1.pt` | 293,539,147 B | PyTorch checkpoint | same |
 
@@ -223,8 +224,8 @@ build is still pending (see the MATLAB Compiler notes).
   backend through `manageMatlabSession.ps1` and `manageSegWorker.ps1`, so a
   Windows host is required as written. The restart path is PowerShell-only
   (`workerSupervisor.js`).
-- **Peak RAM estimate for one central grading box:** MATLAB session ≈ 2.2 GB
-  plus seg worker ≈ 2.0 GB plus Node and Postgres. A cold `matlab -batch`
+- **Peak RAM estimate for one central grading box:** MATLAB session ≈ 2.1 GB
+  plus seg worker ≈ 1.0 GB (with lazy loading) plus Node and Postgres. A cold `matlab -batch`
   (report PDF, or the case-pipeline fallback) adds another MATLAB process of
   1.5 GB or more while it runs. Plan for **≥ 8 GB**.
 
