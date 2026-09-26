@@ -28,6 +28,7 @@ const { execFile } = require('child_process');
 
 const pool       = require('../db/pgClient');
 const mediaPaths = require('./mediaPaths');
+const mediaCrypto = require('./mediaCrypto');
 const matlabSession = require('./matlabSessionClient');
 
 const ML_ROOT     = path.resolve(__dirname, '..', 'ml-pipeline');
@@ -80,7 +81,19 @@ async function loadReportInput(caseId) {
   return rows[0] || null;
 }
 
+// MATLAB reads the image and Grad-CAM by path and cannot decrypt, so it gets
+// temp plaintext copies (mediaCrypto.withPlaintextCopy); the PDF it writes is
+// encrypted as soon as it exists.
 async function render(caseId, row) {
+  const gradcam = row.gradcam_path && fs.existsSync(row.gradcam_path) ? row.gradcam_path : null;
+  const out = await mediaCrypto.withPlaintextCopy(row.image_path || null, (imagePath) =>
+    mediaCrypto.withPlaintextCopy(gradcam, (gradcamPath) =>
+      renderPlain(caseId, { ...row, image_path: imagePath, gradcam_path: gradcamPath })));
+  mediaCrypto.encryptFileInPlace(out);
+  return out;
+}
+
+async function renderPlain(caseId, row) {
   const outPath = path.join(mediaPaths.caseDir(caseId), 'report.pdf');
   const input = {
     caseId,

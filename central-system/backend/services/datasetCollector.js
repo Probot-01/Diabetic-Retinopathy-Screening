@@ -43,7 +43,9 @@ const fs = require('fs');
 function hashFile(filePath) {
   if (!filePath) return null;
   try {
-    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    // Of the PLAINTEXT image: the hash identifies the photograph, not how it
+    // happens to be stored (media may be encrypted at rest, mediaCrypto.js).
+    return crypto.createHash('sha256').update(require('./mediaCrypto').readFile(filePath)).digest('hex');
   } catch {
     // A missing or unreadable image is not a reason to fail the review — the
     // clinical record matters more than the training row. Null hash means
