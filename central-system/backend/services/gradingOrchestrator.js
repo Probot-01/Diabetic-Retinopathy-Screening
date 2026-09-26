@@ -59,6 +59,7 @@ const fs         = require('fs');
 const os         = require('os');
 const pool       = require('../db/pgClient');
 const mediaPaths = require('./mediaPaths');
+const mediaCrypto = require('./mediaCrypto');
 const { fromMatlab, fromMatlabDeep } = require('./matlabInterop');
 const matlabFallback = require('./matlabFallback');
 const matlabSession  = require('./matlabSessionClient');
@@ -73,10 +74,12 @@ const { cameraNotValidated: isCameraNotValidated } = require('./validatedCameras
 // (the CNN grade, Python) and Phase 4 segmentation (also Python) are
 // completely unaffected either way — only the MATLAB-only stages (Branch B's
 // grading call site, the camera cross-check, lesion-attention consistency)
-// are substituted. Set MATLAB_ALLOW_FALLBACK=0 to disable this and get the
-// original hard-fail behaviour back (e.g. on a machine that has MATLAB and
-// wants a real MATLAB error to actually fail the case).
-const ALLOW_MATLAB_FALLBACK = process.env.MATLAB_ALLOW_FALLBACK !== '0';
+// are substituted.
+//
+// OFF by default (2026-09-26): a missing MATLAB fails the case loudly. Opt in
+// with MATLAB_ALLOW_FALLBACK=1, and only on a machine that genuinely has no
+// MATLAB -- standing rule: no silent engine fallback.
+const ALLOW_MATLAB_FALLBACK = process.env.MATLAB_ALLOW_FALLBACK === '1';
 
 // ── Path constants ────────────────────────────────────────────────────────────
 const ML_ROOT          = path.resolve(__dirname, '..', 'ml-pipeline');
@@ -661,10 +664,30 @@ async function hasClearedCameraSiteProbation(phcId, cameraDeviceId, excludeCaseI
 /**
  * processCase(caseId)
  *
+ * Media may be encrypted at rest (mediaCrypto.js), and Python and MATLAB read
+ * the image by path, so grading runs on a decrypted temp copy that is deleted
+ * afterwards. Everything the pipeline wrote into the case's media directory
+ * (Grad-CAM, masks) is encrypted as soon as it finishes -- success or failure.
+ *
  * @param {string} caseId — UUID of the case to grade.
  * @returns {Promise<Object>} summary of what was written to the DB.
  */
 async function processCase(caseId) {
+  const { rows } = await pool.query('SELECT image_path FROM cases WHERE case_id = $1', [caseId]);
+  if (!rows.length) return gradeCase(caseId, null);   // throws "not found", as before
+  try {
+    return await mediaCrypto.withPlaintextCopy(rows[0].image_path,
+      (plainImagePath) => gradeCase(caseId, plainImagePath));
+  } finally {
+    try {
+      mediaCrypto.encryptDir(mediaPaths.caseDir(caseId));
+    } catch (err) {
+      console.error(`[gradingOrchestrator] case ${caseId}: could not encrypt pipeline outputs: ${err.message}`);
+    }
+  }
+}
+
+async function gradeCase(caseId, plainImagePath) {
   // ── Step 1: fetch case row ─────────────────────────────────────────────────
   // Joined to patients for age, which the urgency score needs and the cases
   // table does not carry. LEFT JOIN, not INNER: a case whose patient row is
@@ -678,7 +701,9 @@ async function processCase(caseId) {
     throw new Error(`processCase: case '${caseId}' not found in cases table`);
 
   const caseRow   = caseRes.rows[0];
-  const imagePath = caseRow.image_path;
+  // The readable copy from processCase; the stored path itself when the file
+  // is not encrypted.
+  const imagePath = plainImagePath || caseRow.image_path;
   if (!imagePath)
     throw new Error(`processCase: case '${caseId}' has no image_path`);
 

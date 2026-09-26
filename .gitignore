@@ -32,6 +32,10 @@ phc-local-app/backend/captures/
 phc-local-app/backend/storage/
 central-system/backend/media/
 central-system/backend/explainability-outputs/
+# Pre-encryption plaintext media moved out of the served tree (2026-09-26).
+# Never served, never committed.
+central-system/backend/media-archive/
+media-archive/
 
 # ── Dataset images ────────────────────────────────────────────────────────────
 # datasets/.gitignore already handles this with */

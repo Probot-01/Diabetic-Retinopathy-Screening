@@ -33,7 +33,19 @@ const liveTest = params.has('live');
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 scrollTo(0, 0);
 
-for (const a of document.querySelectorAll('.role')) a.href = ROLE_URLS[a.dataset.role];
+for (const a of document.querySelectorAll('.role')) {
+  const url = ROLE_URLS[a.dataset.role];
+  if (url) {
+    a.href = url;
+  } else {
+    // Not configured: say so instead of linking somewhere guessed.
+    a.removeAttribute('href');
+    a.setAttribute('aria-disabled', 'true');
+    a.title = `Not configured: set VITE_${a.dataset.role === 'nurse' ? 'NURSE' : 'OPHTHALMOLOGIST'}_URL in .env`;
+    a.style.opacity = '0.45';
+    a.style.cursor = 'not-allowed';
+  }
+}
 root.style.setProperty('--track-h', `${(SCREENS + 1) * 100}vh`);
 
 function webglAvailable() {

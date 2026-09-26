@@ -9,6 +9,7 @@ import { BranchComparisonPanel } from './BranchComparisonPanel';
 import { DecisionControls } from './DecisionControls';
 import { CaseHistoryTimeline } from './CaseHistoryTimeline';
 import { InfoBanner } from '../shared/InfoBanner';
+import { LoadError } from '../shared/LoadError';
 
 const MetricBar = ({ label, value, maxVal = 1, color = 'var(--c-crimson)' }) => {
   const pct = Math.round((value / maxVal) * 100);
@@ -54,24 +55,43 @@ export const CaseDetailPage = () => {
   const [reviewSubmitted, setReviewSubmitted] = useState(false);
   const [claimedBy, setClaimedBy] = useState(null);
   const [priorReview, setPriorReview] = useState(null);
+  // Failures, kept apart: without the case there is nothing to show; a failed
+  // claim or review-history call is shown next to the case, not hidden.
+  const [loadError, setLoadError] = useState(null);
+  const [sideErrors, setSideErrors] = useState([]);
+  const [reloadKey, setReloadKey] = useState(0);
   const startTimeRef = useRef(Date.now());
 
   useEffect(() => {
+    let cancelled = false;
     startTimeRef.current = Date.now();
-    
+    setLoading(true);
+    setLoadError(null);
+    setSideErrors([]);
+    const noteSideError = (what) => (err) => {
+      if (!cancelled) setSideErrors(prev => [...prev, { what, err }]);
+    };
+
     Promise.all([
       centralApi.getCaseDetail(caseId),
       centralApi.claimCase(caseId).catch(err => {
         if (err.status === 409) setClaimedBy(err.claimedBy || 'Another Reviewer');
+        else noteSideError('COULD NOT CLAIM THIS CASE — another reviewer may open it too')(err);
       }),
       centralApi.getReviews(caseId).then(reviews => {
         if (reviews && reviews.length > 0) setPriorReview(reviews[0]);
-      })
+      }).catch(noteSideError('COULD NOT LOAD THE REVIEW HISTORY — a prior review may exist')),
     ]).then(([data]) => {
+      if (cancelled) return;
       setCaseData(data);
       setLoading(false);
+    }).catch(err => {
+      if (cancelled) return;
+      setLoadError(err);
+      setLoading(false);
     });
-  }, [caseId]);
+    return () => { cancelled = true; };
+  }, [caseId, reloadKey]);
 
   const handleReviewSubmit = async (reviewData) => {
     const durationSec = Math.round((Date.now() - startTimeRef.current) / 1000);
@@ -95,6 +115,18 @@ export const CaseDetailPage = () => {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="section">
+        <LoadError error={loadError} what={`case ${String(caseId).slice(0, 8).toUpperCase()}`}
+          onRetry={() => setReloadKey(k => k + 1)} />
+        <button className="btn btn--outline" onClick={() => navigate('/ophth/queue')}>
+          ← {t('central.caseDetail.nav.queue', 'CASES')}
+        </button>
+      </div>
+    );
+  }
+
   if (!caseData) {
     return <div className="section"><p className="t-mono">{t('central.caseDetail.notFound', 'Case not found.')}</p></div>;
   }
@@ -104,6 +136,9 @@ export const CaseDetailPage = () => {
 
   return (
     <div className={`section case-detail ${reviewSubmitted ? 'case-detail--submitted' : ''}`}>
+      {sideErrors.map(({ what, err }) => (
+        <LoadError key={what} error={err} title={what} compact />
+      ))}
       {/* Top Bar — Case ID + Tier + Mismatch Warning */}
       <div className={`case-detail__top-bar ${isBranchMismatch ? 'case-detail__top-bar--mismatch' : ''}`}>
         <div className="u-flex u-items-center u-gap-4">

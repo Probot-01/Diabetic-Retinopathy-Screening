@@ -56,6 +56,9 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const pool = require(path.join(ROOT, 'central-system', 'backend', 'db', 'pgClient'));
+// Stored images may be encrypted at rest; hashes and exported copies are of
+// the plaintext image (services/mediaCrypto.js).
+const mediaCrypto = require(path.join(ROOT, 'central-system', 'backend', 'services', 'mediaCrypto'));
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
@@ -65,7 +68,7 @@ const has = (name) => process.argv.includes(name);
 
 function sha256(file) {
   try {
-    return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    return crypto.createHash('sha256').update(mediaCrypto.readFile(file)).digest('hex');
   } catch {
     return null;
   }
@@ -161,7 +164,8 @@ async function main() {
   const header = 'image,label,label_source,model_grade,conformal_tier,eye,case_id,labelled_at,sha256\n';
   const lines = examples.map((e) => {
     const name = `${e.image_sha256.slice(0, 16)}${path.extname(e.image_path) || '.jpg'}`;
-    if (copyImages) fs.copyFileSync(e.image_path, path.join(outDir, 'images', name));
+    // Decrypted on export: the training pipeline reads plain image files.
+    if (copyImages) fs.writeFileSync(path.join(outDir, 'images', name), mediaCrypto.readFile(e.image_path));
     const rel = copyImages ? `images/${name}` : e.image_path;
     return [rel, e.label_grade, e.label_source, e.model_grade ?? '', e.conformal_tier || '',
       e.eye_laterality || '', e.case_id, new Date(e.labelled_at).toISOString(),

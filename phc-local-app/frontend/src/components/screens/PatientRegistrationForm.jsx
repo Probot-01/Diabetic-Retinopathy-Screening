@@ -2,7 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { localApi } from '../../api/localApiClient';
+import { USE_MOCK_DATA } from '../../config';
 import { RetinalWaveCanvas } from '../shared/RetinalWaveCanvas';
+import { LoadError } from '../shared/LoadError';
+
+// Mock mode opens the form pre-filled with a clearly fictional patient for
+// rapid testing. Live mode opens it empty — and with consent NOT ticked: a
+// technician must record consent for the real person in front of them.
+const demo = (value, empty = '') => (USE_MOCK_DATA ? value : empty);
 
 /* ── tiny internal questionnaire ─────────────────────────── */
 const BLOOD_PRESSURE_OPTIONS = [
@@ -68,43 +75,44 @@ export const PatientRegistrationForm = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
 
-  /* ── patient-info (prefilled with realistic mock data for rapid testing) ── */
+  /* ── patient-info (mock mode: prefilled fictional patient, see demo()) ── */
   const [patientType, setPatientType] = useState('new');
-  const [abhaId, setAbhaId] = useState('91827364501928');
-  const [visitNo, setVisitNo] = useState('1');
-  const [title, setTitle] = useState('Mrs');
-  const [firstName, setFirstName] = useState('Sunita');
-  const [middleName, setMiddleName] = useState('K.');
-  const [lastName, setLastName] = useState('Devi');
-  const [gender, setGender] = useState('female');
-  const [dob, setDob] = useState('12/03/1972');
-  const [age, setAge] = useState('54');
-  const [maritalStatus, setMaritalStatus] = useState('married');
-  const [bloodGroup, setBloodGroup] = useState('B+');
+  const [abhaId, setAbhaId] = useState(demo('91827364501928'));
+  const [visitNo, setVisitNo] = useState(demo('1'));
+  const [title, setTitle] = useState(demo('Mrs', 'Mr'));
+  const [firstName, setFirstName] = useState(demo('Sunita'));
+  const [middleName, setMiddleName] = useState(demo('K.'));
+  const [lastName, setLastName] = useState(demo('Devi'));
+  const [gender, setGender] = useState(demo('female'));
+  const [dob, setDob] = useState(demo('12/03/1972'));
+  const [age, setAge] = useState(demo('54'));
+  const [maritalStatus, setMaritalStatus] = useState(demo('married'));
+  const [bloodGroup, setBloodGroup] = useState(demo('B+', 'Unknown'));
 
   /* ── address ──────────────────────────────────────────── */
-  const [address, setAddress] = useState('Plot No. 24, Near Gram Panchayat, Village Rampur');
-  const [state, setState] = useState('Maharashtra');
-  const [pincode, setPincode] = useState('413102');
-  const [district, setDistrict] = useState('Solapur');
-  const [occupation, setOccupation] = useState('homemaker');
-  const [contactNumber, setContactNumber] = useState('+919876543210');
-  const [altPhone, setAltPhone] = useState('+919811223344');
+  const [address, setAddress] = useState(demo('Plot No. 24, Near Gram Panchayat, Village Rampur'));
+  const [state, setState] = useState(demo('Maharashtra'));
+  const [pincode, setPincode] = useState(demo('413102'));
+  const [district, setDistrict] = useState(demo('Solapur'));
+  const [occupation, setOccupation] = useState(demo('homemaker'));
+  const [contactNumber, setContactNumber] = useState(demo('+919876543210'));
+  const [altPhone, setAltPhone] = useState(demo('+919811223344'));
 
   /* ── questionnaire ────────────────────────────────────── */
-  const [knownDiabetic, setKnownDiabetic] = useState(true);
-  const [yearsSinceDx, setYearsSinceDx] = useState('5to10');
+  const [knownDiabetic, setKnownDiabetic] = useState(demo(true, false));
+  const [yearsSinceDx, setYearsSinceDx] = useState(demo('5to10', '1to5'));
   const [glycemicControl, setGlycemicControl] = useState('moderate');
-  const [bloodPressure, setBloodPressure] = useState('high');
+  const [bloodPressure, setBloodPressure] = useState(demo('high', 'normal'));
   const [pregnancy, setPregnancy] = useState('not_applicable');
   const [eyeSymptoms, setEyeSymptoms] = useState({
-    blurredVision: true, floaters: false, suddenVisionChange: false, eyePain: false,
+    blurredVision: demo(true, false), floaters: false, suddenVisionChange: false, eyePain: false,
   });
 
   /* ── consent ──────────────────────────────────────────── */
-  const [consentObtained, setConsentObtained] = useState(true);
-  const [consentGivenAt, setConsentGivenAt] = useState(() => new Date().toISOString());
+  const [consentObtained, setConsentObtained] = useState(demo(true, false));
+  const [consentGivenAt, setConsentGivenAt] = useState(() => (USE_MOCK_DATA ? new Date().toISOString() : null));
 
   /* derived */
   const parsedAge = parseInt(age, 10);
@@ -150,6 +158,7 @@ export const PatientRegistrationForm = () => {
       return;
     }
     setLoading(true);
+    setSubmitError(null);
     try {
       const payload = {
         name: fullName || firstName,
@@ -182,8 +191,9 @@ export const PatientRegistrationForm = () => {
       }).toString();
       navigate(`/capture?${query}`);
     } catch (err) {
+      // Not registered: stay on the form with everything the technician typed.
       console.error(err);
-      alert('Failed to register patient');
+      setSubmitError(err);
     } finally {
       setLoading(false);
     }
@@ -467,6 +477,7 @@ export const PatientRegistrationForm = () => {
         </div>
 
         {/* ── 5. FOOTER ACTIONS ───────────────────────────── */}
+        {submitError && <LoadError error={submitError} title="PATIENT NOT REGISTERED" compact />}
         <div className="reg-footer">
           <button type="button" className="btn btn--outline" onClick={handleClearAll}>
             <span>CLEAR ALL</span>

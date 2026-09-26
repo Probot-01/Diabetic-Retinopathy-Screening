@@ -135,52 +135,54 @@ One `.env` at the **repository root** — both backends load it.
 
 ```ini
 # --- required ---
-DATABASE_URL=postgres://USER:PASSWORD@localhost:5432/dr_screening_central
+DATABASE_URL=postgresql://netrasetu:netrasetu_dev@localhost:5433/dr_screening_central
 MATLAB_EXECUTABLE=matlab
 MATLAB_TIMEOUT_MS=120000
 
 # --- optional, sensible defaults exist ---
 # PYTHON_EXECUTABLE=python
 # PORT=5000
-# CENTRAL_URL=http://localhost:5000
+# CENTRAL_API_URL=http://localhost:5000   (PHC backend; required, no default)
 # CORS_ALLOWED_ORIGINS=https://your-app.vercel.app,http://localhost:5173
 # SMS_DRY_RUN=1
 ```
 
-**CORS defaults already cover the demo.** With `CORS_ALLOWED_ORIGINS` unset, the
-allow-list is the usual dev ports plus `https://*.vercel.app` — Vercel mints a
-new subdomain per deployment, so a pinned URL would break on the next push. Set
-the variable only to narrow it.
+*(2026-09-26: each backend now has its own `.env` and `.env.example`; see the
+README's "Run locally". `CENTRAL_URL` was renamed `CENTRAL_API_URL`; the old
+name is still read, with a warning.)*
+
+**CORS defaults cover local dev only.** With `CORS_ALLOWED_ORIGINS` unset, the
+central backend allows just the two local frontends (`http://localhost:5173`,
+`:5174`). A Vercel frontend must be listed explicitly. The pattern
+`https://*.vercel.app` is accepted for per-deployment subdomains. A bare `*` is
+refused at startup, because credentials are on.
 
 `SMS_DRY_RUN=1` keeps Twilio from sending real messages. Leave it on unless you
 have credentials and intend to demo live SMS.
 
 ### Frontend variables (Vite)
 
-Both frontends are env-driven and **default to mock data**, so they show
-fabricated results until told otherwise. Set these in Vercel's project settings,
-or in a `.env` beside the frontend for a local `npm run dev`:
+Both frontends default to **live** data (changed 2026-09-26). Set these in
+Vercel's project settings, or in the `.env` beside each frontend for a local
+`npm run dev`. Each frontend's `.env.example` lists them:
 
 ```ini
-VITE_USE_MOCK_DATA=false
-VITE_CENTRAL_API_BASE=http://localhost:5000
-VITE_LOCAL_API_BASE=http://localhost:4000        # PHC app only
+VITE_DATA_MODE=live                               # or mock
+VITE_CENTRAL_API_BASE=http://localhost:5000       # central app
+VITE_LOCAL_API_BASE=http://localhost:4000         # PHC app
 ```
 
-`VITE_USE_MOCK_DATA` must be the **string** `false`. Anything else — unset,
-empty, `0`, `False` — leaves mock data on, because the check is
-`=== 'true'` with a default of `true`. If the UI still shows data after you stop
-both backends, this is why.
-
-The PHC app also carries `VITE_ML_API_ENDPOINT`, defaulting to a separate ngrok
-FastAPI service. That is **not this pipeline** — see section 10.
+Live mode never shows mock data. A failed request shows an error state, and an
+unset API URL is reported on screen. `VITE_DATA_MODE=mock` shows fixture data
+with a permanent "DEMO DATA — not real results" banner. The old
+`VITE_USE_MOCK_DATA` and the ngrok `VITE_ML_API_ENDPOINT` are gone.
 
 ---
 
 ## 6. Database
 
 ```bash
-createdb dr_screening_central          # or create it in pgAdmin
+npm run db:up                          # Docker Postgres on :5433 (docker-compose.dev.yml)
 cd central-system/backend && npm run setup-db
 cd ../../phc-local-app/backend && npm run setup-db   # creates the local SQLite file
 ```
@@ -345,7 +347,7 @@ them.
 | Case stuck on `processing` | queue died mid-flight | restart central backend; recovery re-queues |
 | Case goes straight to `error` in ~7 s | MATLAB or Python missing — classified permanent, not retried | check `MATLAB_EXECUTABLE` / `PYTHON_EXECUTABLE` |
 | Browser: CORS / network error, server log silent | request blocked before reaching Express | section 8.4 |
-| Frontend shows data with backends stopped | mock data still on | set `VITE_USE_MOCK_DATA=false` — exactly that string |
+| Frontend shows data with backends stopped | `VITE_DATA_MODE=mock` (the DEMO DATA banner is showing) | set `VITE_DATA_MODE=live` and restart `npm run dev` |
 | Grading takes ~12 s | expected — 5 models + MATLAB | not a fault |
 
 ---
@@ -365,13 +367,9 @@ Stated so these read as decisions rather than bugs on demo day:
 - **The PHC quality gate cannot read DICOM.** It still uses `imread`, so a
   `.dcm` cannot complete capture → sync end to end. The central pipeline reads
   DICOM fine.
-- **Mock data is the DEFAULT in both frontends.** They are env-driven now, but
-  `USE_MOCK_DATA` falls back to `true` when `VITE_USE_MOCK_DATA` is unset. A
-  frontend deployed without that variable shows fabricated results and never
-  calls these backends — and looks perfectly healthy doing it.
-- **`VITE_ML_API_ENDPOINT`** in the PHC frontend defaults to a separate ngrok
-  FastAPI service, not this pipeline. If that is what demos, none of Branch B,
-  the conformal tiering, the evidence report or Grad-CAM appears on screen.
+- ~~Mock data is the default in both frontends~~ and ~~`VITE_ML_API_ENDPOINT`
+  points at ngrok~~: both fixed 2026-09-26. Frontends default to live, and mock
+  mode is explicit (`VITE_DATA_MODE=mock`) with an on-screen banner.
 
 ---
 
@@ -379,7 +377,7 @@ Stated so these read as decisions rather than bugs on demo day:
 
 Only worth it to show offline-first sync, which is a genuine differentiator.
 
-Laptop 2 runs the PHC backend with `CENTRAL_URL=http://<laptop-1-ip>:5000`.
+Laptop 2 runs the PHC backend with `CENTRAL_API_URL=http://<laptop-1-ip>:5000`.
 Disconnect the network, capture cases, reconnect, watch them sync.
 
 **The catch:** laptop 2 needs MATLAB for the quality gate, or `qualityGate.exe`

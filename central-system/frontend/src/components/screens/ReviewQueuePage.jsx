@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { centralApi } from '../../api/centralApiClient';
 import { drGradeLabels } from '../../api/mockData';
 import { InfoBanner } from '../shared/InfoBanner';
+import { LoadError } from '../shared/LoadError';
 
 const SortHeader = ({ label, sortKey, currentSort, onRequestSort, width }) => {
   const active = currentSort.key === sortKey;
@@ -137,6 +138,10 @@ export const ReviewQueuePage = () => {
   const { t } = useTranslation();
   const [queue, setQueue] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Last poll's failure, if any. The previous good queue stays on screen,
+  // marked stale; before the first success there is no queue to show at all.
+  const [loadError, setLoadError] = useState(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [filter, setFilter] = useState('all');
   const [showInfoModal, setShowInfoModal] = useState(false);
   // Respect user settings for initial default sort & compact table view
@@ -179,6 +184,12 @@ export const ReviewQueuePage = () => {
       centralApi.getOphthQueue().then(data => {
         if (cancelled) return;
         setQueue(data);
+        setHasLoaded(true);
+        setLoadError(null);
+        setLoading(false);
+      }).catch(err => {
+        if (cancelled) return;
+        setLoadError(err);
         setLoading(false);
       });
     };
@@ -300,8 +311,26 @@ export const ReviewQueuePage = () => {
     );
   }
 
+  if (loadError && !hasLoaded) {
+    return (
+      <div className="section">
+        <LoadError error={loadError} what="the review queue" />
+        <p className="t-mono" style={{ fontSize: 'var(--fs-tiny)' }}>Retrying every 5 seconds.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="section">
+      {loadError && (
+        <LoadError error={loadError} what="the latest review queue"
+          compact />
+      )}
+      {loadError && (
+        <p className="t-mono u-mb-4" style={{ fontSize: 'var(--fs-tiny)', color: 'var(--c-crimson)' }}>
+          The list below is from the last successful refresh and may be out of date. Retrying every 5 seconds.
+        </p>
+      )}
       <div className="u-flex u-items-center u-justify-between u-mb-6">
         <div>
           <p className="section__subtitle">{t('central.queue.subtitle', 'OPHTHALMOLOGIST INTERFACE')}</p>

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { centralApi } from '../../api/centralApiClient';
+import { USE_MOCK_DATA } from '../../config';
+import { LoadError } from '../shared/LoadError';
 import { EyeHeroSVG } from './EyeHeroSVG';
 import './AdminScrollDashboard.css';
 
@@ -87,6 +89,13 @@ const Card = React.memo(({ side, cardRef, children }) => (
   </div>
 ));
 
+// Live mode gets only casesToday, casesPerPhc and averageReviewTurnaroundSeconds
+// from GET /admin/dashboard (api-contracts.md). Every other figure is "—" in
+// live mode; the trend deltas and the referral funnel are mock-only copy.
+const NA = '—';
+const pct = (v) => (typeof v === 'number' ? Math.round(v * 1000) / 10 : null);
+const mockOnly = (text) => (USE_MOCK_DATA ? text : undefined);
+
 // --- Stat card with counter ---
 const StatCard = React.memo(({ label, value, suffix, delta, deltaDir, visible, index = 0 }) => {
   const animVal = useCountUp(value, visible);
@@ -97,7 +106,7 @@ const StatCard = React.memo(({ label, value, suffix, delta, deltaDir, visible, i
     >
       <div className="admin-scroll__stat-label">{label}</div>
       <div className="admin-scroll__stat-value">
-        <span ref={animVal} />{suffix && <span className="suffix">{suffix}</span>}
+        <span ref={animVal} />{suffix && value !== NA && <span className="suffix">{suffix}</span>}
       </div>
       {delta && (
         <div className={`admin-scroll__stat-delta admin-scroll__stat-delta--${deltaDir || 'up'}`}>
@@ -109,11 +118,14 @@ const StatCard = React.memo(({ label, value, suffix, delta, deltaDir, visible, i
 });
 
 // --- Progress ring ---
+// `value` is a percentage, or null when the API does not provide the figure:
+// then the ring stays empty and reads "—".
 const ProgressRing = React.memo(({ value, visible, label, index = 0 }) => {
   const r = 36;
   const circumference = 2 * Math.PI * r;
-  const offset = visible ? circumference * (1 - value / 100) : circumference;
-  const animVal = useCountUp(value.toFixed(1), visible, 1600);
+  const has = typeof value === 'number';
+  const offset = visible && has ? circumference * (1 - value / 100) : circumference;
+  const animVal = useCountUp(has ? value.toFixed(1) : NA, visible, 1600);
 
   return (
     <div
@@ -134,7 +146,7 @@ const ProgressRing = React.memo(({ value, visible, label, index = 0 }) => {
             }}
           />
         </svg>
-        <div className="admin-scroll__ring-value"><span ref={animVal} />%</div>
+        <div className="admin-scroll__ring-value"><span ref={animVal} />{has ? '%' : ''}</div>
       </div>
       <div className="admin-scroll__stat-label">{label}</div>
     </div>
@@ -144,6 +156,7 @@ const ProgressRing = React.memo(({ value, visible, label, index = 0 }) => {
 // ===== MAIN COMPONENT =====
 export const AdminScrollDashboard = () => {
   const [data, setData] = useState(null);
+  const [loadError, setLoadError] = useState(null);
 
   // Arriving from the sign-in journey (a tall, scrolled page) would otherwise
   // drop the visitor into the middle of this story. This has to be instant and
@@ -171,7 +184,7 @@ export const AdminScrollDashboard = () => {
 
   // Load data
   useEffect(() => {
-    centralApi.getAdminDashboard().then(d => setData(d)).catch(() => {});
+    centralApi.getAdminDashboard().then(d => setData(d)).catch(err => setLoadError(err));
   }, []);
 
   // ── Scroll engine ─────────────────────────────────────────────────
@@ -345,31 +358,27 @@ export const AdminScrollDashboard = () => {
     return new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   }, []);
 
-  // Mock data fallbacks
+  // Straight from the response (mock mode: mockAdminDashboard). A field the
+  // response does not carry is shown as "—", never as a stand-in number.
   const stats = useMemo(() => ({
-    casesToday: data?.stats?.casesToday ?? 42,
-    thisWeek: data?.stats?.thisWeek ?? 187,
-    totalProcessed: data?.stats?.totalProcessed ?? '1,284',
-    avgReviewTime: data?.stats?.avgReviewTime ?? '27',
-    modelAccuracy: data?.stats?.modelAccuracy ?? 94.6,
-    overrideRate: data?.stats?.overrideRate ?? 8.3,
-    avgConfidence: data?.stats?.avgConfidence ?? 92.4,
-    imagesRejected: data?.stats?.imagesRejected ?? 38,
+    casesToday: data?.casesToday ?? NA,
+    thisWeek: data?.casesThisWeek ?? NA,
+    totalProcessed: data?.totalCasesProcessed != null ? data.totalCasesProcessed.toLocaleString() : NA,
+    avgReviewTime: data?.averageReviewTurnaroundSeconds ?? NA,
+    modelAccuracy: pct(data?.modelAccuracy),
+    overrideRate: pct(data?.overrideRate),
+    avgConfidence: pct(data?.avgConfidenceScore),
+    imagesRejected: data?.imagesRejectedQuality ?? NA,
   }), [data]);
 
-  const phcs = useMemo(() => data?.casesPerPhc ?? [
-    { phcName: 'PHC Kharadi', count: 12 },
-    { phcName: 'PHC Wagholi', count: 9 },
-    { phcName: 'PHC Hadapsar', count: 15 },
-    { phcName: 'PHC Lohegaon', count: 6 },
-  ], [data]);
+  const phcs = useMemo(() => data?.casesPerPhc ?? [], [data]);
 
   const maxPhcCount = useMemo(() => Math.max(...phcs.map(p => p.count), 1), [phcs]);
 
   // The readout that trails the story along the foot of the screen.
   const telemetry = useMemo(() => ([
     { k: 'CASES', v: stats.casesToday },
-    { k: 'ACCURACY', v: stats.modelAccuracy + '%' },
+    { k: 'ACCURACY', v: stats.modelAccuracy != null ? stats.modelAccuracy + '%' : NA },
     { k: 'CENTRES', v: phcs.length },
     { k: 'QUEUE', v: stats.thisWeek },
   ]), [stats, phcs]);
@@ -432,6 +441,11 @@ export const AdminScrollDashboard = () => {
           <p className="admin-scroll__subtitle" style={{ marginTop: '1.5rem' }}>
             A comprehensive look at the DR screening program across all Primary Health Centres in your district.
           </p>
+          {loadError && (
+            <div style={{ marginTop: '1rem' }}>
+              <LoadError error={loadError} what="the district dashboard" compact />
+            </div>
+          )}
           <div className="admin-scroll__cue" aria-hidden="true">
             <span className="admin-scroll__cue-rail"><span /></span>
             SCROLL
@@ -446,10 +460,10 @@ export const AdminScrollDashboard = () => {
             Real-time screening throughput across all connected PHCs.
           </p>
           <div className="admin-scroll__stats admin-scroll__stats--col">
-            <StatCard index={0} label="CASES TODAY" value={stats.casesToday} delta="+12% from yesterday" deltaDir="up" visible={visibleChapters.has(1)} />
-            <StatCard index={1} label="THIS WEEK" value={stats.thisWeek} delta="+8% WoW" deltaDir="up" visible={visibleChapters.has(1)} />
+            <StatCard index={0} label="CASES TODAY" value={stats.casesToday} delta={mockOnly('+12% from yesterday')} deltaDir="up" visible={visibleChapters.has(1)} />
+            <StatCard index={1} label="THIS WEEK" value={stats.thisWeek} delta={mockOnly('+8% WoW')} deltaDir="up" visible={visibleChapters.has(1)} />
             <StatCard index={2} label="TOTAL PROCESSED" value={stats.totalProcessed} visible={visibleChapters.has(1)} />
-            <StatCard index={3} label="AVG REVIEW TIME" value={stats.avgReviewTime} suffix="s" delta="-3s from last week" deltaDir="up" visible={visibleChapters.has(1)} />
+            <StatCard index={3} label="AVG REVIEW TIME" value={stats.avgReviewTime} suffix="s" delta={mockOnly('-3s from last week')} deltaDir="up" visible={visibleChapters.has(1)} />
           </div>
         </Card>
 
@@ -462,7 +476,7 @@ export const AdminScrollDashboard = () => {
           </p>
           <div className="admin-scroll__rings">
             <ProgressRing index={0} value={stats.modelAccuracy} visible={visibleChapters.has(2)} label="MODEL ACCURACY" />
-            <ProgressRing index={1} value={100 - stats.overrideRate} visible={visibleChapters.has(2)} label="AGREEMENT RATE" />
+            <ProgressRing index={1} value={stats.overrideRate != null ? 100 - stats.overrideRate : null} visible={visibleChapters.has(2)} label="AGREEMENT RATE" />
             <ProgressRing index={2} value={stats.avgConfidence} visible={visibleChapters.has(2)} label="AVG CONFIDENCE" />
           </div>
         </Card>
@@ -475,13 +489,16 @@ export const AdminScrollDashboard = () => {
             Per-centre case distribution and screening workload.
           </p>
           <div className="admin-scroll__phc-grid">
+            {data && phcs.length === 0 && (
+              <p className="admin-scroll__subtitle">No cases from any PHC today.</p>
+            )}
             {phcs.map((phc, i) => (
               <div
-                key={phc.phcName}
+                key={phc.phcId ?? 'unattributed'}
                 className={`admin-scroll__phc ${visibleChapters.has(3) ? 'admin-scroll__phc--visible' : ''}`}
                 style={{ '--i': i }}
               >
-                <div className="admin-scroll__phc-name">{phc.phcName.replace('PHC ', '')}</div>
+                <div className="admin-scroll__phc-name">{(phc.phcName || 'Unattributed').replace('PHC ', '')}</div>
                 <div className="admin-scroll__phc-count">{phc.count}</div>
                 <div className="admin-scroll__phc-bar">
                   <div
@@ -501,13 +518,18 @@ export const AdminScrollDashboard = () => {
           <p className="admin-scroll__subtitle">
             Patient journey from AI screening to specialist confirmation and treatment.
           </p>
+          {!USE_MOCK_DATA && (
+            <p className="admin-scroll__subtitle">
+              Funnel figures are not provided by the central API yet; see Referrals for the live list.
+            </p>
+          )}
           <div className="admin-scroll__funnel">
-            {[
+            {(USE_MOCK_DATA ? [
               { label: 'SCREENED', value: 1284, width: '100%' },
               { label: 'REFERRED', value: 312, width: '24%' },
               { label: 'CONFIRMED', value: 287, width: '22%' },
               { label: 'TREATED', value: 198, width: '15%' },
-            ].map((step, i) => (
+            ] : []).map((step, i) => (
               <div
                 key={step.label}
                 className={`admin-scroll__funnel-step ${visibleChapters.has(4) ? 'admin-scroll__funnel-step--visible' : ''}`}
@@ -544,7 +566,7 @@ export const AdminScrollDashboard = () => {
               </span>
             ))}
           </span>
-          <span className="admin-scroll__telemetry-live">LIVE</span>
+          <span className="admin-scroll__telemetry-live">{USE_MOCK_DATA ? 'DEMO' : 'LIVE'}</span>
         </div>
       </div>
     </div>

@@ -12,12 +12,8 @@
  * them up.
  */
 
-const path = require('path');
-
-// Explicit path: a bare .config() resolves against the process cwd, so starting
-// the server from the repo root rather than this directory would silently load
-// nothing -- taking DATABASE_URL and MATLAB_EXECUTABLE with it.
-require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+// This service's .env, then the shared root .env -- by explicit path, see loadEnv.js.
+require('./loadEnv');
 
 const express      = require('express');
 const cookieParser = require('cookie-parser');
@@ -25,7 +21,6 @@ const cookieParser = require('cookie-parser');
 // Loaded first so a bad auth configuration (AUTH_ENABLED without JWT_SECRET,
 // an invalid COOKIE_SAMESITE) stops the server at boot, not on first login.
 const authConfig               = require('./services/authConfig');
-const requireAuth              = require('./middleware/requireAuth');
 
 const gradingQueue             = require('./services/gradingQueue');
 
@@ -42,6 +37,20 @@ const notificationsRouter      = require('./routes/notifications');
 const PORT = parseInt(process.env.PORT || '5000', 10);
 
 const app = express();
+
+// Behind a reverse proxy (the Vite dev proxy locally; nginx/Caddy/a platform
+// load balancer in deployment) req.ip and req.secure must come from
+// X-Forwarded-For / X-Forwarded-Proto, or the login rate limiter counts the
+// proxy as one client. Default: trust loopback proxies only, so a client on the
+// network cannot spoof its address by sending the header itself. In
+// deployment set TRUST_PROXY to the proxy's hop count or address
+// (Express "trust proxy" syntax), e.g. TRUST_PROXY=1.
+app.set('trust proxy', (() => {
+  const v = (process.env.TRUST_PROXY || 'loopback').trim();
+  if (/^\d+$/.test(v)) return Number(v);
+  if (/^(true|false)$/i.test(v)) return v.toLowerCase() === 'true';
+  return v;
+})());
 
 // CORS first, before json parsing and before every route, so it also covers
 // /media (mask and Grad-CAM images the frontend fetches) and so a preflight
@@ -94,7 +103,9 @@ app.use('/api/v1/notifications',   notificationsRouter);
 //
 // Guarded like any other patient-data route (§A.3). The session is a cookie, so
 // the browser sends it on <img> requests too and no signed-URL scheme is needed.
-app.use('/media', requireAuth, express.static(path.join(__dirname, 'media')));
+// routes/media.js: requireAuth + requireRole, decrypts files encrypted at rest,
+// and writes access_log.
+app.use('/media', require('./routes/media'));
 
 // ── Error handling ───────────────────────────────────────────────────────────
 // api-contracts.md: every non-2xx body is { error, message }.
@@ -169,7 +180,10 @@ if (require.main === module) {
     console.log(`central backend on ${useTls ? 'https' : 'http'}://localhost:${PORT}` +
       (useTls ? ' (TLS 1.2+)' : ' (NO TLS -- set TLS_KEY_PATH / TLS_CERT_PATH)'));
     console.log(`[central] auth: users ${authConfig.AUTH_ENABLED ? 'ENFORCED' : 'not enforced (AUTH_ENABLED=false)'}, ` +
-      `PHC keys ${authConfig.PHC_AUTH_ENABLED ? 'ENFORCED' : 'not enforced (PHC_AUTH_ENABLED=false)'}`);
+      `PHC keys ${authConfig.PHC_AUTH_ENABLED ? 'ENFORCED' : 'not enforced (PHC_AUTH_ENABLED=false)'}, ` +
+      `session cookie ${authConfig.cookieOptions.secure ? 'Secure' : 'NOT Secure (COOKIE_SECURE=false: local HTTP dev only)'}`);
+    console.log(`[central] media at rest: ${require('./services/mediaCrypto').enabled()
+      ? 'AES-256-GCM encrypted' : 'NOT encrypted -- set MEDIA_ENCRYPTION_KEY'}`);
   };
   const server = useTls
     ? require('https').createServer({

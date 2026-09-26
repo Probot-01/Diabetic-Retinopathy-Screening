@@ -52,6 +52,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const mediaPaths   = require('./mediaPaths');
+const mediaCrypto  = require('./mediaCrypto');
 const ingestion    = require('./ingestionService');
 const gradingQueue = require('./gradingQueue');
 
@@ -345,7 +346,9 @@ async function putChunk(captureRef, index, buffer, chunkSha) {
   return withLock(`${captureRef}:${i}`, async () => {
     const p = chunkPath(captureRef, i);
     const tmp = `${p}.tmp`;
-    fs.writeFileSync(tmp, buffer);
+    // Pieces of a patient image: encrypted at rest like the image itself
+    // (mediaCrypto; checksum was verified on the plaintext above).
+    fs.writeFileSync(tmp, mediaCrypto.encryptBuffer(buffer));
     fs.renameSync(tmp, p);     // atomic: a .part file is always whole
 
     const received = receivedChunks(captureRef);
@@ -400,7 +403,7 @@ async function completeSession(captureRef) {
     const parts = [];
     let assembledBytes = 0;
     for (let i = 0; i < manifest.totalChunks; i++) {
-      const buf = fs.readFileSync(chunkPath(captureRef, i));
+      const buf = mediaCrypto.readFile(chunkPath(captureRef, i));
       hash.update(buf);
       assembledBytes += buf.length;
       parts.push(buf);

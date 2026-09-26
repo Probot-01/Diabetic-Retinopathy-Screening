@@ -42,7 +42,6 @@ netrasetu/
   lib/quality/     quality gate (pure TS; testable in Node)
   api/ sync/       central client and sync manager
   components/ screens/ navigation/
-src/               LEGACY: the previous implementation, no longer imported. Safe to delete.
 ```
 
 ## Tests

@@ -25,6 +25,7 @@ const path = require('path');
 
 const pool       = require('../db/pgClient');
 const mediaPaths = require('./mediaPaths');
+const mediaCrypto = require('./mediaCrypto');
 const cfg        = require('./authConfig');
 const lesionCounts = require('./lesionCounts');
 
@@ -357,7 +358,7 @@ async function ingestCase(fields) {
       // cases_image_required_unless_awaiting constraint is checked per
       // statement, so leaving 'awaiting_image' before the path is set fails.
       const summaryImagePath = mediaPaths.originalPath(caseId, ext);
-      fs.writeFileSync(summaryImagePath, buffer);
+      mediaCrypto.writeFile(summaryImagePath, buffer);   // encrypted at rest when MEDIA_ENCRYPTION_KEY is set
       await client.query(`
         UPDATE cases
         SET status             = 'processing',
@@ -381,7 +382,7 @@ async function ingestCase(fields) {
 
     if (!fromSummary) {
       const imagePath = mediaPaths.originalPath(caseId, ext);
-      fs.writeFileSync(imagePath, buffer);
+      mediaCrypto.writeFile(imagePath, buffer);   // encrypted at rest when MEDIA_ENCRYPTION_KEY is set
       await client.query('UPDATE cases SET image_path = $1 WHERE case_id = $2',
         [imagePath, caseId]);
     }

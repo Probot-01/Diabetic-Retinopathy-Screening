@@ -50,4 +50,4 @@ console.log('Add to .env (central backend):');
 console.log(`  TLS_KEY_PATH=${key.replace(/\\/g, '/')}`);
 console.log(`  TLS_CERT_PATH=${cert.replace(/\\/g, '/')}`);
 console.log('And for the PHC backend, so its sync manager trusts it:');
-console.log(`  NODE_EXTRA_CA_CERTS=${cert.replace(/\\/g, '/')}   and   CENTRAL_URL=https://localhost:5000`);
+console.log(`  NODE_EXTRA_CA_CERTS=${cert.replace(/\\/g, '/')}   and   CENTRAL_API_URL=https://localhost:5000`);

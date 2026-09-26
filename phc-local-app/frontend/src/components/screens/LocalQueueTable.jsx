@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localApi } from '../../api/localApiClient';
 import { mockAiPredictions } from '../../api/mockData';
+import { USE_MOCK_DATA } from '../../config';
+import { LoadError } from '../shared/LoadError';
 import { DiagnosticResultModal } from './DiagnosticResultModal';
 
 const PIPELINE_CONFIG = {
@@ -46,6 +48,7 @@ export const LocalQueueTable = () => {
   const { t } = useTranslation();
   const [queue, setQueue] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -56,8 +59,11 @@ export const LocalQueueTable = () => {
         const data = await localApi.getQueue();
         if (cancelled) return;
         setQueue(data);
+        setLoadError(null);
       } catch (err) {
+        // The last good list stays visible, marked stale by the error above it.
         console.error(err);
+        if (!cancelled) setLoadError(err);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -128,6 +134,11 @@ export const LocalQueueTable = () => {
         </div>
       </div>
 
+      {loadError && (
+        <LoadError error={loadError} compact
+          title={queue.length ? 'QUEUE NOT REFRESHED — SHOWING THE LAST GOOD LIST' : 'COULD NOT LOAD THE CAPTURE QUEUE'} />
+      )}
+
       <div className="panel queue-panel">
         <div className="queue-table-wrapper">
           <table className="table queue-table">
@@ -149,6 +160,12 @@ export const LocalQueueTable = () => {
                   </td>
                 </tr>
               ))
+            ) : queue.length === 0 && loadError ? (
+              <tr>
+                <td colSpan="5" className="u-text-center u-p-6">
+                  <span className="t-mono" style={{ opacity: 0.5 }}>—</span>
+                </td>
+              </tr>
             ) : queue.length === 0 ? (
               <tr>
                 <td colSpan="5" className="u-text-center u-p-6">
@@ -158,7 +175,10 @@ export const LocalQueueTable = () => {
             ) : (
               queue.map((item) => {
                 const config = PIPELINE_CONFIG[item.status] || PIPELINE_CONFIG.captured;
-                const isReady = item.status === 'result_delivered';
+                // Live rows carry no prediction (the PHC never holds a grade), so
+                // there is nothing real to open; the modal must never fall back
+                // to a fixture result for them.
+                const isReady = item.status === 'result_delivered' && (USE_MOCK_DATA || !!item.prediction);
 
                 return (
                   <tr 
@@ -184,7 +204,7 @@ export const LocalQueueTable = () => {
                       {renderStageIndicator(item.status)}
                     </td>
                     <td>
-                      {config.actionDisabled ? (
+                      {config.actionDisabled || !isReady ? (
                         <button
                           type="button"
                           disabled
@@ -217,7 +237,7 @@ export const LocalQueueTable = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         item={selectedItem}
-        prediction={selectedItem?.prediction || mockAiPredictions.pass}
+        prediction={selectedItem?.prediction || (USE_MOCK_DATA ? mockAiPredictions.pass : null)}
         imageUrl={selectedItem?.imagePreviewUrl || selectedItem?.imageUrl}
       />
     </div>

@@ -59,22 +59,33 @@
  *     a SameSite=Lax cookie is never sent cross-site.
  */
 
+// Used ONLY when CORS_ALLOWED_ORIGINS is unset: the local dev frontends on their
+// pinned ports (vite.config.js sets strictPort, so they never drift). Anything
+// hosted -- including Vercel -- has to be listed explicitly; an unset variable
+// no longer opens the backend to every *.vercel.app page on the internet.
 const DEV_DEFAULTS = [
-  'http://localhost:5173',   // Vite dev
-  'http://localhost:4173',   // Vite preview
-  'http://localhost:3000',   // CRA / Next dev
+  'http://localhost:5173',   // phc-local-app/frontend
+  'http://localhost:5174',   // central-system/frontend
   'http://127.0.0.1:5173',
-  'http://127.0.0.1:4173',
-  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5174',
 ];
 
 // Vercel preview deployments get a fresh subdomain per push, so pinning one
-// URL would break on the next deploy — mid-demo, most likely.
+// URL would break on the next deploy. Not a default any more: put this pattern
+// in CORS_ALLOWED_ORIGINS when a Vercel frontend should reach this backend.
 const DEMO_DEFAULTS = ['https://*.vercel.app'];
 
 function parseOrigins(raw) {
-  if (!raw) return [...DEV_DEFAULTS, ...DEMO_DEFAULTS];
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!raw || !raw.trim()) return [...DEV_DEFAULTS];
+  const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  // Credentials are always on (the session is a cookie), and a credentialed
+  // response may never allow every origin. Refuse at boot rather than serve a
+  // config that either leaks the session to any site or silently fails.
+  if (list.some((o) => o === '*' || o === 'null')) {
+    throw new Error(`CORS_ALLOWED_ORIGINS must list origins explicitly; '*' and 'null' are refused ` +
+      'because credentials are enabled.');
+  }
+  return list;
 }
 
 /**

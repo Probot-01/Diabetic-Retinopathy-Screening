@@ -5,6 +5,7 @@ import { AppLayout } from './components/layout/AppLayout';
 import { PatientRegistrationForm } from './components/screens/PatientRegistrationForm';
 import { CaptureScreen } from './components/screens/CaptureScreen';
 import { LocalQueueTable } from './components/screens/LocalQueueTable';
+import { DemoDataBanner } from './components/shared/DemoDataBanner';
 
 function App() {
   const [auth, setAuth] = useState(() => {
@@ -34,6 +35,7 @@ function App() {
 
   return (
     <BrowserRouter>
+      <DemoDataBanner />
       <Routes>
         {/* Landing Page: Authentication Screen */}
         <Route
