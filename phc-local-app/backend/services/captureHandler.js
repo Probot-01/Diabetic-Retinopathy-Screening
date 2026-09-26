@@ -7,12 +7,14 @@
  * gate over it, and records the outcome.
  *
  *   handleCapture(patientId, imageFile, cameraDeviceId)
- *     -> { captureId, patientId, qualityStatus, qualityReason, retakeCount, capturedAt }
+ *     -> { captureId, patientId, qualityStatus, qualityReason, retakeCount,
+ *          capturedAt, qualityGateEngine }
+ *   recheckCapture(captureId)     re-run the gate on an already-saved capture
  *
- * The returned object is EXACTLY the POST /captures response body from
- * api-contracts.md -- camelCase, ISO 8601 UTC timestamp, string IDs. The route
- * in Task 3.2 should be able to `res.status(201).json(await handleCapture(...))`
- * with no reshaping in between.
+ * The returned object is the POST /captures response body from
+ * api-contracts.md -- camelCase, ISO 8601 UTC timestamp, string IDs -- plus
+ * qualityGateEngine (which engine ran the gate). The route in Task 3.2 can
+ * `res.status(201).json(await handleCapture(...))` with no reshaping.
  *
  * ORDER OF OPERATIONS, and why
  *   1. write the image to disk
@@ -163,7 +165,7 @@ function provisionalPriority(qualityStatus) {
  * @param {string} patientId       — an existing patients.patient_id
  * @param {string|Buffer|object} imageFile — see resolveImageInput
  * @param {string} [cameraDeviceId] — a key in cameraPresets.json, or 'unknown'
- * @returns {Promise<{captureId,patientId,qualityStatus,qualityReason,retakeCount,capturedAt}>}
+ * @returns {Promise<{captureId,patientId,qualityStatus,qualityReason,retakeCount,capturedAt,qualityGateEngine}>}
  */
 async function handleCapture(patientId, imageFile, cameraDeviceId = 'unknown') {
   if (!patientId) {
@@ -200,63 +202,114 @@ async function handleCapture(patientId, imageFile, cameraDeviceId = 'unknown') {
     VALUES (?, ?, ?, ?, 'pending', NULL, ?, ?)
   `).run(captureId, patientId, cameraDeviceId, imagePath, retakeCount, capturedAt);
 
-  // ── 3. Quality gate (spawns MATLAB; seconds, not milliseconds) ─────────────
-  let gate;
-  try {
-    gate = await runQualityGate(imagePath, cameraDeviceId);
-  } catch (err) {
-    // Leave the row 'pending'. The image is on disk and the row points at it,
-    // so this capture can be re-gated without recalling the patient.
-    console.error(`[captureHandler] quality gate failed for ${captureId}:`, err.message);
-    throw new Error(`quality_gate_failed: ${err.message}`);
+  // ── 3. + 4. Quality gate, then record the verdict ──────────────────────────
+  return gateCapture(captureId);
+}
+
+// Captures whose gate is running right now, so a second request for the same
+// one (a double-clicked RETRY) cannot run it twice and enqueue it twice.
+const gating = new Set();
+
+/**
+ * gateCapture(captureId)
+ *
+ * Runs the quality gate (spawns MATLAB; seconds, not milliseconds) over an
+ * already-stored capture and records the verdict and -- atomically with it --
+ * the sync-queue row if it passed. A capture that already has a verdict is
+ * returned as it is, not re-gated.
+ *
+ * If the gate cannot run (MATLAB missing, timeout...) the row stays 'pending',
+ * the image stays on disk, and this throws 'quality_gate_failed: ...' with
+ * .captureId set: the capture is recoverable (recheckCapture) and must never be
+ * presented as lost, or as passed.
+ */
+async function gateCapture(captureId) {
+  const row = db.prepare('SELECT * FROM captures WHERE capture_id = ?').get(captureId);
+  if (!row) throw new Error(`gateCapture: capture_not_found (${captureId})`);
+  if (row.quality_status !== 'pending') return toResponse(row);
+
+  if (gating.has(captureId)) {
+    throw Object.assign(new Error('quality_gate_busy: this capture is already being checked'),
+      { captureId });
   }
+  gating.add(captureId);
 
-  // ── 4. Record the verdict, and enqueue for sync ────────────────────────────
-  // Both writes in one transaction. A capture that passed the gate but has no
-  // sync_queue row would never reach the central server and nothing would ever
-  // notice -- it would just look like a case the ophthalmologist never got to.
-  const commit = db.transaction(() => {
-    // qualityGateClient already normalises MATLAB's empty-matrix reason to null.
-    // quality_scores is stored, not just logged. The six sub-scores say WHICH
-    // dimension of an image is weak, and Task 2.8's adaptive enhancement runs
-    // centrally -- so discarding them here means the central pipeline can only
-    // apply one fixed chain to every image, which is what "adaptive" was
-    // supposed to stop.
-    db.prepare(`
-      UPDATE captures SET quality_status = ?, quality_reason = ?, quality_scores = ?
-      WHERE capture_id = ?
-    `).run(gate.status, gate.reason,
-           gate.scores ? JSON.stringify(gate.scores) : null,
-           captureId);
-
-    // Only pass/borderline get queued. A 'retake' is not a case -- the
-    // technician is about to shoot it again (design doc §8.1 loops back to
-    // step 1), so uploading it would spend scarce rural bandwidth on an image
-    // that is already being replaced.
-    if (gate.status === 'pass' || gate.status === 'borderline') {
-      db.prepare(`
-        INSERT INTO sync_queue
-          (queue_id, capture_id, status, priority, chunks_sent, chunks_total, last_attempt_at)
-        VALUES (?, ?, 'pending', ?, 0, 1, NULL)
-      `).run(generateLocalId(), captureId, provisionalPriority(gate.status));
+  try {
+    let gate;
+    try {
+      gate = await runQualityGate(row.image_path, row.camera_device_id || 'unknown');
+    } catch (err) {
+      // Leave the row 'pending'. The image is on disk and the row points at it,
+      // so this capture can be re-gated without recalling the patient.
+      console.error(`[captureHandler] quality gate failed for ${captureId}:`, err.message);
+      throw Object.assign(new Error(`quality_gate_failed: ${err.message}`), { captureId });
     }
-  });
-  commit();
 
-  // Sub-scores are for logging only -- api-contracts.md does not expose them,
-  // and they are not part of the response below.
-  console.log(`[captureHandler] ${captureId}: ${gate.status}`
-    + `${gate.reason ? ` (${gate.reason})` : ''}`
-    + ` scores=${JSON.stringify(gate.scores)}`);
+    // Both writes in one transaction. A capture that passed the gate but has no
+    // sync_queue row would never reach the central server and nothing would ever
+    // notice -- it would just look like a case the ophthalmologist never got to.
+    const commit = db.transaction(() => {
+      // qualityGateClient already normalises MATLAB's empty-matrix reason to null.
+      // quality_scores is stored, not just logged. The six sub-scores say WHICH
+      // dimension of an image is weak, and Task 2.8's adaptive enhancement runs
+      // centrally -- so discarding them here means the central pipeline can only
+      // apply one fixed chain to every image, which is what "adaptive" was
+      // supposed to stop.
+      db.prepare(`
+        UPDATE captures SET quality_status = ?, quality_reason = ?, quality_scores = ?,
+                            quality_engine = ?
+        WHERE capture_id = ?
+      `).run(gate.status, gate.reason,
+             gate.scores ? JSON.stringify(gate.scores) : null,
+             gate.engine ? JSON.stringify(gate.engine) : null,
+             captureId);
 
+      // Only pass/borderline get queued. A 'retake' is not a case -- the
+      // technician is about to shoot it again (design doc §8.1 loops back to
+      // step 1), so uploading it would spend scarce rural bandwidth on an image
+      // that is already being replaced.
+      if (gate.status === 'pass' || gate.status === 'borderline') {
+        db.prepare(`
+          INSERT INTO sync_queue
+            (queue_id, capture_id, status, priority, chunks_sent, chunks_total, last_attempt_at)
+          VALUES (?, ?, 'pending', ?, 0, 1, NULL)
+        `).run(generateLocalId(), captureId, provisionalPriority(gate.status));
+      }
+    });
+    commit();
+
+    // Sub-scores are for logging only -- api-contracts.md does not expose them.
+    console.log(`[captureHandler] ${captureId}: ${gate.status}`
+      + `${gate.reason ? ` (${gate.reason})` : ''}`
+      + ` engine=${gate.engine ? gate.engine.engine : 'unrecorded'}`
+      + ` scores=${JSON.stringify(gate.scores)}`);
+
+    return toResponse(db.prepare('SELECT * FROM captures WHERE capture_id = ?').get(captureId));
+  } finally {
+    gating.delete(captureId);
+  }
+}
+
+/** recheckCapture(captureId) -- re-run the gate on a saved capture; see gateCapture. */
+function recheckCapture(captureId) {
+  return gateCapture(captureId);
+}
+
+/** The POST /captures response body for a capture row (api-contracts.md, plus qualityGateEngine). */
+function toResponse(row) {
+  let engine = null;
+  try { engine = row.quality_engine ? JSON.parse(row.quality_engine) : null; } catch { engine = null; }
   return {
-    captureId,
-    patientId,
-    qualityStatus: gate.status,
-    qualityReason: gate.reason,
-    retakeCount,
-    capturedAt,
+    captureId:     row.capture_id,
+    patientId:     row.patient_id,
+    qualityStatus: row.quality_status,
+    qualityReason: row.quality_reason ?? null,
+    retakeCount:   row.retake_count,
+    capturedAt:    row.captured_at,
+    // Which engine ran the gate ({ engine, fallback, detail }). null only for a
+    // capture gated before this was stored -- never guessed.
+    qualityGateEngine: engine,
   };
 }
 
-module.exports = { handleCapture, STORAGE_DIR };
+module.exports = { handleCapture, recheckCapture, STORAGE_DIR };

@@ -58,6 +58,8 @@ function addColumnIfMissing(table, column, definition) {
 }
 
 addColumnIfMissing('captures', 'quality_scores', 'TEXT');
+// Engine provenance: which engine ran the quality gate, as a JSON string.
+addColumnIfMissing('captures', 'quality_engine', 'TEXT');
 // Design doc §9.7: when the technician confirmed verbal consent (ISO-8601).
 addColumnIfMissing('patients', 'consent_given_at', 'TEXT');
 // Design doc §10.4: which eye this capture is of ('left' | 'right').
@@ -146,6 +148,13 @@ addColumnIfMissing('sync_queue', 'central_case_id', 'TEXT');
 addColumnIfMissing('sync_queue', 'central_status', 'TEXT');
 addColumnIfMissing('sync_queue', 'owner_device', 'TEXT');
 addColumnIfMissing('sync_queue', 'updated_at', 'TEXT');
+// 2026-09-26: why a capture is still pending, so a rejection is visible instead of
+// an endless silent retry. error_kind is 'network' | 'rejected' (central answered 4xx)
+// | 'server' (5xx / unusable answer); next_attempt_at backs off rejected/server rows.
+addColumnIfMissing('sync_queue', 'last_error', 'TEXT');
+addColumnIfMissing('sync_queue', 'error_kind', 'TEXT');
+addColumnIfMissing('sync_queue', 'attempts', 'INTEGER NOT NULL DEFAULT 0');
+addColumnIfMissing('sync_queue', 'next_attempt_at', 'TEXT');
 
 const SYNCED_TABLES = {
   patients: 'patient_id',

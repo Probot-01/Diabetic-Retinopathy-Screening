@@ -10,7 +10,7 @@
     "setup-db": "node ../../scripts/setupLocalDb.js",
     "technician": "node scripts/technician.js",
     "peer": "node scripts/peer.js",
-    "test": "node --test --test-concurrency=1 test/auth-peer.test.js"
+    "test": "node --test --test-concurrency=1 test/auth-peer.test.js test/sync-flow.test.js test/quality-gate-engine.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

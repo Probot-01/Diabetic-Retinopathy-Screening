@@ -249,24 +249,22 @@ function assessGlareMotionOcclusion(pixels, width, height, discMask, discArea) {
 /**
  * runQualityGateFallback(imageBuffer)
  *
- * Explicitly refused: The JS algorithms diverged from the MATLAB path and 
- * gave silently different decisions. It is safer to force a retake when 
- * MATLAB is absent.
+ * Explicitly refused: the JS algorithms diverged from the MATLAB path and gave
+ * silently different decisions, so this tier is switched off.
+ *
+ * It THROWS rather than returning a verdict. It used to return
+ * { status: 'retake', reason: 'MATLAB_UNAVAILABLE' } -- a made-up result: no
+ * check had run, so the image had not failed anything, and 'MATLAB_UNAVAILABLE'
+ * is not one of the contract's six quality reasons. A technician would have
+ * been told to retake a photograph that may have been fine, over and over. A
+ * throw is reported truthfully: POST /captures answers 503 quality_gate_failed,
+ * the image is kept, and the capture can be re-checked once MATLAB (or the
+ * compiled gate, QUALITY_GATE_EXE) is available.
  */
-async function runQualityGateFallback(imageBuffer) {
-  return { 
-    status: 'retake', 
-    reason: 'MATLAB_UNAVAILABLE', 
-    scores: {
-      focusScore: 0,
-      illuminationScore: 0,
-      fovScore: 0,
-      coveragePercent: 0,
-      glareScore: 0,
-      motionScore: 0,
-      occlusionScore: 0
-    }
-  };
+async function runQualityGateFallback(imageBuffer) { // eslint-disable-line no-unused-vars
+  throw new Error(
+    'the JS quality-gate fallback is switched off (its decisions diverged from the MATLAB gate), '
+    + 'so no quality check could run. Install MATLAB or build the compiled gate (QUALITY_GATE_EXE).');
 }
 
 module.exports = { runQualityGateFallback };

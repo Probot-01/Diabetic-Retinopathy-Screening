@@ -23,7 +23,7 @@ const express = require('express');
 const multer  = require('multer');
 
 const db                  = require('../db/localDb');
-const { handleCapture }   = require('../services/captureHandler');
+const { handleCapture, recheckCapture } = require('../services/captureHandler');
 const { generateLocalId } = require('../services/ids');
 
 const router = express.Router();
@@ -106,6 +106,44 @@ function captureExists(captureId) {
   return !!db.prepare('SELECT capture_id FROM captures WHERE capture_id = ?').get(captureId);
 }
 
+// ── Capture errors ───────────────────────────────────────────────────────────
+// handleCapture / recheckCapture signal their failures by message prefix.
+// Mapping them here keeps the services free of HTTP concerns. Returns true when
+// it has sent the response.
+function sendCaptureError(res, err, patientId) {
+  if (err.message.includes('patient_not_found')) {
+    res.status(404).json({
+      error: 'patient_not_found',
+      message: `No patient with id ${patientId}`,
+    });
+    return true;
+  }
+  if (err.message.startsWith('quality_gate_busy')) {
+    res.status(409).json({
+      error: 'quality_gate_busy',
+      message: 'The quality check for this capture is already running.',
+      captureId: err.captureId,
+    });
+    return true;
+  }
+  if (err.message.startsWith('quality_gate_failed')) {
+    // The capture row survives as 'pending' and the image is on disk, so this
+    // is recoverable -- say so, and hand back the id to re-check it with
+    // (POST /captures/:captureId/quality-check), rather than implying the
+    // capture was lost.
+    const detail = err.message.replace(/^quality_gate_failed:\s*/, '').slice(0, 300);
+    res.status(503).json({
+      error: 'quality_gate_failed',
+      message: 'The image was saved but the quality check could not run. '
+             + 'Check that MATLAB (or the compiled quality gate) is available, then re-run the check. '
+             + `Detail: ${detail}`,
+      captureId: err.captureId,
+    });
+    return true;
+  }
+  return false;
+}
+
 // ── POST /captures ───────────────────────────────────────────────────────────
 router.post('/', upload.single('image'), async (req, res, next) => {
   const { patientId, cameraDeviceId } = req.body || {};
@@ -118,23 +156,26 @@ router.post('/', upload.single('image'), async (req, res, next) => {
       patientId, req.file, cameraDeviceId || 'unknown');
     res.status(201).json(result);
   } catch (err) {
-    // handleCapture signals these two by message prefix. Mapping them here
-    // keeps the service free of HTTP concerns.
-    if (err.message.includes('patient_not_found')) {
-      return res.status(404).json({
-        error: 'patient_not_found',
-        message: `No patient with id ${patientId}`,
-      });
-    }
-    if (err.message.startsWith('quality_gate_failed')) {
-      // The capture row survives as 'pending' and the image is on disk, so this
-      // is recoverable — say so, rather than implying the capture was lost.
-      return res.status(503).json({
-        error: 'quality_gate_failed',
-        message: 'The image was saved but the quality check could not run. '
-               + 'Check that MATLAB is available, then re-run the check.',
-      });
-    }
+    if (sendCaptureError(res, err, patientId)) return;
+    next(err);
+  }
+});
+
+// ── POST /captures/:captureId/quality-check ──────────────────────────────────
+// Re-run the quality gate on a capture that was SAVED but not checked (the
+// 503 quality_gate_failed case), without asking for the photograph again.
+// Same body as POST /captures; a capture that already has a verdict is
+// returned as it is, not re-gated.
+router.post('/:captureId/quality-check', async (req, res, next) => {
+  if (!captureExists(req.params.captureId)) {
+    return res.status(404).json({
+      error: 'capture_not_found', message: `No capture with id ${req.params.captureId}`,
+    });
+  }
+  try {
+    res.json(await recheckCapture(req.params.captureId));
+  } catch (err) {
+    if (sendCaptureError(res, err)) return;
     next(err);
   }
 });
@@ -153,19 +194,7 @@ router.post('/mobile', upload.single('image'), async (req, res, next) => {
     const result = await handleCapture(patientId, req.file, 'mobile_lens');
     res.status(201).json(result);
   } catch (err) {
-    if (err.message.includes('patient_not_found')) {
-      return res.status(404).json({
-        error: 'patient_not_found',
-        message: `No patient with id ${patientId}`,
-      });
-    }
-    if (err.message.startsWith('quality_gate_failed')) {
-      return res.status(503).json({
-        error: 'quality_gate_failed',
-        message: 'The image was saved but the quality check could not run. '
-               + 'Check that MATLAB is available, then re-run the check.',
-      });
-    }
+    if (sendCaptureError(res, err, patientId)) return;
     next(err);
   }
 });
@@ -319,7 +348,11 @@ router.post('/:captureId/capture-metadata', (req, res) => {
 router.get('/', (req, res) => {
   const rows = db.prepare(`
     SELECT c.capture_id, c.patient_id, p.name AS patient_name,
-           c.quality_status, c.captured_at, q.status AS sync_status
+           c.quality_status, c.quality_reason, c.captured_at,
+           q.status AS sync_status, q.central_status, q.last_error, q.error_kind,
+           q.attempts, q.next_attempt_at, q.chunks_sent, q.chunks_total,
+           EXISTS (SELECT 1 FROM questionnaire_responses qr WHERE qr.capture_id = c.capture_id) AS has_questionnaire,
+           EXISTS (SELECT 1 FROM capture_metadata_responses cm WHERE cm.capture_id = c.capture_id) AS has_metadata
     FROM captures c
     JOIN patients p ON p.patient_id = c.patient_id
     LEFT JOIN sync_queue q ON q.capture_id = c.capture_id
@@ -333,6 +366,24 @@ router.get('/', (req, res) => {
     patientName: r.patient_name,
     status:      lifecycleStatus(r),
     capturedAt:  r.captured_at,
+    // Additive detail behind `status` (api-contracts.md, 2026-09-26):
+    // 'pending' (gate not run) is internal and never returned as a quality status.
+    qualityStatus: r.quality_status === 'pending' ? null : r.quality_status,
+    qualityReason: r.quality_reason ?? null,
+    // Both questionnaires recorded? Until they are, the capture cannot sync.
+    formsComplete: !!(r.has_questionnaire && r.has_metadata),
+    // What central last said about the case: awaiting_image | processing |
+    // graded | error, or null before it has answered.
+    centralStatus: r.central_status ?? null,
+    // Why the capture is still pending, in central's own words (or the network
+    // error). null when nothing is wrong. kind: network | rejected | server.
+    syncError: r.sync_status === 'pending' && r.last_error
+      ? { kind: r.error_kind, message: r.last_error, attempts: r.attempts, nextAttemptAt: r.next_attempt_at ?? null }
+      : null,
+    // Progress of a chunked upload in flight or interrupted (null for small images).
+    uploadProgress: r.sync_status === 'pending' && r.chunks_total > 1
+      ? { sent: r.chunks_sent, total: r.chunks_total }
+      : null,
   })));
 });
 
@@ -345,15 +396,23 @@ router.get('/', (req, res) => {
  * `status` answers "how far along is this case"
  * (captured -> quality_passed -> synced -> result_pending -> result_delivered).
  *
- * Only the first three are reachable today. result_pending and
- * result_delivered require knowing what the central server did with the case,
- * and nothing local tracks that yet -- the sync manager (Task 3.4) only records
- * that the upload succeeded. Returning 'synced' for a case that is actually
- * awaiting a result is the honest answer for now; do NOT fake the later two by
- * guessing from elapsed time.
+ * The last three come from what CENTRAL said, never from elapsed time
+ * (syncManager.pollResults keeps sync_queue.central_status current):
+ *   synced            central accepted the case (201) but has not reported on it
+ *   result_pending    central reports awaiting_image / processing
+ *   result_delivered  central reports graded
+ * A case central reports as 'error' stays 'synced' -- accepted, but with no
+ * result -- and carries centralStatus:'error' so the screen can say so instead
+ * of showing a result that does not exist.
  */
 function lifecycleStatus(row) {
-  if (row.sync_status === 'synced') return 'synced';
+  if (row.sync_status === 'synced') {
+    if (row.central_status === 'graded') return 'result_delivered';
+    if (row.central_status === 'processing' || row.central_status === 'awaiting_image') {
+      return 'result_pending';
+    }
+    return 'synced';
+  }
   if (row.quality_status === 'pass' || row.quality_status === 'borderline') {
     return 'quality_passed';
   }
