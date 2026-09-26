@@ -99,6 +99,24 @@ function readFile(filePath) {
 }
 
 /**
+ * For SERVING: the plaintext of a file that must be encrypted at rest. A
+ * plaintext file here means something wrote media outside mediaCrypto (or
+ * before the key existed); it is refused with code media_not_encrypted rather
+ * than served, so an unencrypted copy of a patient image never quietly goes
+ * out as if everything were fine.
+ */
+function readEncryptedFile(filePath) {
+  const buf = fs.readFileSync(filePath);
+  if (!isEncrypted(buf)) {
+    const err = new Error(`${path.basename(filePath)} is stored unencrypted; refusing to serve it. ` +
+      'Set MEDIA_ENCRYPTION_KEY and run scripts/encryptMedia.js, or move the file out of media/.');
+    err.code = 'media_not_encrypted';
+    throw err;
+  }
+  return decryptBuffer(buf);
+}
+
+/**
  * Encrypt one file in place (atomic rename). No-op without a key or when the
  * file is already encrypted. Returns true when it changed the file.
  */
@@ -146,6 +164,6 @@ async function withPlaintextCopy(filePath, fn) {
 
 module.exports = {
   enabled, isEncrypted, encryptBuffer, decryptBuffer,
-  writeFile, readFile, encryptFileInPlace, encryptDir, withPlaintextCopy,
+  writeFile, readFile, readEncryptedFile, encryptFileInPlace, encryptDir, withPlaintextCopy,
   _resetKeyForTests: () => { cachedKey = undefined; },
 };

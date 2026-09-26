@@ -53,14 +53,20 @@ router.get('/*', requireAuth, requireRole('ophthalmologist', 'district_admin'), 
 
   let body;
   try {
-    body = mediaCrypto.readFile(abs);
+    // Encrypted files ONLY: a plaintext file under media/ is refused, never
+    // served (mediaCrypto.readEncryptedFile).
+    body = mediaCrypto.readEncryptedFile(abs);
   } catch (err) {
-    // A missing key or a failed GCM tag: never send the ciphertext as if it
-    // were the image.
-    console.error(`[media] cannot decrypt ${rel}: ${err.message}`);
+    // Plaintext file, missing key, or a failed GCM tag: a clear error, never
+    // the raw bytes (plaintext or ciphertext) as if they were the image.
+    console.error(`[media] refusing ${rel}: ${err.message}`);
+    const known = {
+      media_not_encrypted: 'This file is stored unencrypted on the server and is not served. An administrator must encrypt or remove it.',
+      media_key_missing: 'The server has no MEDIA_ENCRYPTION_KEY, so this file cannot be decrypted.',
+    };
     return res.status(500).json({
-      error: err.code === 'media_key_missing' ? 'media_key_missing' : 'media_decrypt_failed',
-      message: 'The file could not be decrypted on the server.',
+      error: known[err.code] ? err.code : 'media_decrypt_failed',
+      message: known[err.code] || 'The file could not be decrypted on the server (wrong key or damaged file).',
     });
   }
 

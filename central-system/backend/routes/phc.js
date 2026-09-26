@@ -152,7 +152,7 @@ router.get('/cases/:captureRef/gradcam', requirePhcApiKey, async (req, res, next
       });
     }
     // Decrypted here: media may be encrypted at rest (services/mediaCrypto.js).
-    res.type('png').send(require('../services/mediaCrypto').readFile(own.gradcam_path));
+    res.type('png').send(require('../services/mediaCrypto').readEncryptedFile(own.gradcam_path));
   } catch (err) { next(err); }
 });
 
