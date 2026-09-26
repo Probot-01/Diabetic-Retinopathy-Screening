@@ -66,8 +66,10 @@ def main():
         sys.exit(3)
 
     try:
-        ckpt = bai.load_checkpoint()
-        x, _display_base, enhanced = bai.preprocess(args.image, ckpt)  # x: (1,3,H,W) NCHW float32
+        # Only the four metadata fields preprocess() reads, from the on-disk
+        # cache when the checkpoint is unchanged -- see load_preprocess_meta().
+        meta = bai.load_preprocess_meta()
+        x, _display_base, enhanced = bai.preprocess(args.image, meta)  # x: (1,3,H,W) NCHW float32
 
         hwcn = np.transpose(x, (2, 3, 1, 0)).astype(np.float32)  # NCHW -> HWCN (MATLAB SSCB)
         sio.savemat(args.outputMat, {

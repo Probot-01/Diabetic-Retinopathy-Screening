@@ -251,6 +251,55 @@ def load_checkpoint():
     return _CKPT
 
 
+# The four checkpoint fields preprocess() reads -- and nothing else.
+PREPROCESS_KEYS = ("img_size", "channel_order", "normalize_mean", "normalize_std")
+
+
+def load_preprocess_meta():
+    """preprocess()'s checkpoint metadata, cached on disk across processes.
+
+    preprocessBranchATensor.py is a FRESH process on every case, so the
+    in-process _CKPT cache never survived to a second case: each one paid
+    `import torch` plus a full torch.load of the checkpoint (~2.9 s measured)
+    to read four small values. They are now read FROM THE CHECKPOINT ITSELF
+    once and kept in a JSON cache keyed by the checkpoint's resolved path,
+    size and mtime, plus BRANCH_A_MODEL_VERSION -- so a swapped or retrained
+    checkpoint, or a version switch, misses the cache and is re-read. Nothing
+    is hardcoded here; a cache miss is exactly the old behaviour.
+    """
+    import tempfile
+    from modelPaths import resolve, CheckpointMissing
+    role = BRANCH_A_MODEL_VERSIONS[BRANCH_A_MODEL_VERSION]["role"]
+    try:
+        ckpt_path = resolve(role)
+    except CheckpointMissing as exc:
+        _fail(str(exc))
+    st = os.stat(ckpt_path)
+    key = {"version": BRANCH_A_MODEL_VERSION, "path": os.path.abspath(ckpt_path),
+           "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    cache_path = os.path.join(tempfile.gettempdir(),
+                              f"netrasetu_{BRANCH_A_MODEL_VERSION}_preprocess_meta.json")
+    try:
+        with open(cache_path, encoding="utf-8") as fh:
+            cached = json.load(fh)
+        if cached.get("key") == key:
+            return cached["meta"]
+    except (OSError, ValueError, KeyError):
+        pass
+
+    ckpt = load_checkpoint()
+    meta = {k: ckpt[k] for k in PREPROCESS_KEYS}
+    meta = json.loads(json.dumps(meta))   # plain JSON types, same as a cache hit returns
+    tmp = f"{cache_path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"key": key, "meta": meta}, fh)
+        os.replace(tmp, cache_path)
+    except OSError:
+        pass   # an unwritable cache only costs the next case the slow path
+    return meta
+
+
 def load_model():
     global _MODEL, _CKPT
     if _MODEL is not None:
