@@ -73,10 +73,12 @@ const { cameraNotValidated: isCameraNotValidated } = require('./validatedCameras
 // (the CNN grade, Python) and Phase 4 segmentation (also Python) are
 // completely unaffected either way — only the MATLAB-only stages (Branch B's
 // grading call site, the camera cross-check, lesion-attention consistency)
-// are substituted. Set MATLAB_ALLOW_FALLBACK=0 to disable this and get the
-// original hard-fail behaviour back (e.g. on a machine that has MATLAB and
-// wants a real MATLAB error to actually fail the case).
-const ALLOW_MATLAB_FALLBACK = process.env.MATLAB_ALLOW_FALLBACK !== '0';
+// are substituted.
+//
+// OFF by default (2026-09-26): a missing MATLAB fails the case loudly. Opt in
+// with MATLAB_ALLOW_FALLBACK=1, and only on a machine that genuinely has no
+// MATLAB -- standing rule: no silent engine fallback.
+const ALLOW_MATLAB_FALLBACK = process.env.MATLAB_ALLOW_FALLBACK === '1';
 
 // ── Path constants ────────────────────────────────────────────────────────────
 const ML_ROOT          = path.resolve(__dirname, '..', 'ml-pipeline');

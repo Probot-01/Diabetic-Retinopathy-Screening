@@ -53,14 +53,17 @@ const { runQualityGateFallback } = require('./qualityGateFallback');
 // exactly that machine). When true, a MATLAB spawn failure (ENOENT — the
 // interpreter genuinely could not be launched) falls back to a pure-JS
 // re-implementation of the same decision logic (qualityGateFallback.js)
-// instead of failing the capture with 503. Set QUALITY_GATE_ALLOW_FALLBACK=0
-// to disable this and get the original hard-fail behaviour back.
+// instead of failing the capture with 503.
+//
+// OFF by default (2026-09-26): without MATLAB or the exe the capture gets
+// 503 quality_gate_failed (image saved, re-checkable). Opt in with
+// QUALITY_GATE_ALLOW_FALLBACK=1 -- standing rule: no silent engine fallback.
 //
 // This does NOT change behaviour on a machine that actually has MATLAB or a
 // compiled exe: both are tried first, exactly as before, and a REAL MATLAB
 // error (bad image, license problem, non-zero exit) is never routed to the
 // fallback — only "the interpreter could not be spawned at all" is.
-const ALLOW_JS_FALLBACK = process.env.QUALITY_GATE_ALLOW_FALLBACK !== '0';
+const ALLOW_JS_FALLBACK = process.env.QUALITY_GATE_ALLOW_FALLBACK === '1';
 
 // Absolute path to the quality-gate-matlab/ folder so MATLAB can addpath it.
 const MATLAB_GATE_DIR = path.resolve(__dirname, '..', 'quality-gate-matlab');
