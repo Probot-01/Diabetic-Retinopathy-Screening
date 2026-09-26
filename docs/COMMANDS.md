@@ -27,7 +27,7 @@ cd ../frontend; npm install
 ```
 
 ```bash
-createdb dr_screening_central
+npm run db:up                     # Docker Postgres on :5433 -- the only database
 cd central-system/backend; npm run setup-db
 cd ../../phc-local-app/backend; npm run setup-db
 ```
@@ -37,7 +37,7 @@ is still read by both backends as a fallback:
 
 ```ini
 # central-system/backend/.env
-DATABASE_URL=postgres://USER:PASSWORD@localhost:5432/dr_screening_central
+DATABASE_URL=postgresql://netrasetu:netrasetu_dev@localhost:5433/dr_screening_central
 MATLAB_EXECUTABLE=matlab
 MATLAB_TIMEOUT_MS=120000
 SMS_DRY_RUN=1

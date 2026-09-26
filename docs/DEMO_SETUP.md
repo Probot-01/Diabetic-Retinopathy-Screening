@@ -135,7 +135,7 @@ One `.env` at the **repository root** — both backends load it.
 
 ```ini
 # --- required ---
-DATABASE_URL=postgres://USER:PASSWORD@localhost:5432/dr_screening_central
+DATABASE_URL=postgresql://netrasetu:netrasetu_dev@localhost:5433/dr_screening_central
 MATLAB_EXECUTABLE=matlab
 MATLAB_TIMEOUT_MS=120000
 
@@ -182,7 +182,7 @@ with a permanent "DEMO DATA — not real results" banner. The old
 ## 6. Database
 
 ```bash
-createdb dr_screening_central          # or create it in pgAdmin
+npm run db:up                          # Docker Postgres on :5433 (docker-compose.dev.yml)
 cd central-system/backend && npm run setup-db
 cd ../../phc-local-app/backend && npm run setup-db   # creates the local SQLite file
 ```
