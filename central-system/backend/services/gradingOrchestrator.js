@@ -349,9 +349,23 @@ async function runBranchAInferenceMatlab(imagePath, gradcamPath) {
  *
  * The distinction that must not blur: NULL means "Branch B did not run", and
  * FALSE means "Branch B ran and disagreed". Only the second forces Tier C.
+ *
+ * ONE EXCEPTION, which REJECTS: segInfer.py's exit code 4, "the MATLAB session
+ * failed a forward pass and the PyTorch fallback is off". That is an engine
+ * failure, not a missing second opinion -- degrading the case to classifier-
+ * only would be the silent engine fallback the standing rules forbid. It
+ * rejects with a retryable code, so the grading queue retries the case and,
+ * if MATLAB stays down, marks it 'error' where System Health shows it.
  */
+const SEG_EXIT_MATLAB_FAILED = 4;
+
+function matlabSegmentationFailed(message) {
+  return unavailable('matlab_segmentation_failed',
+    `Segmentation's MATLAB engine failed and SEG_ALLOW_PYTHON_FALLBACK is off: ${message}`);
+}
+
 function runSegInference(imagePath, outdir) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const args = [SEG_INFER, imagePath];
     if (outdir) args.push('--outdir', outdir);
     const proc = spawn(PYTHON_EXE, args, { env: process.env, timeout: TIMEOUT_MS });
@@ -361,6 +375,9 @@ function runSegInference(imagePath, outdir) {
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
 
     proc.on('close', (code) => {
+      if (code === SEG_EXIT_MATLAB_FAILED) {
+        return reject(matlabSegmentationFailed(stderr.trim().slice(0, 500)));
+      }
       if (code !== 0) {
         console.warn(`[gradingOrchestrator] segmentation exited ${code}; `
           + `Branch B unavailable. stderr: ${stderr.trim().slice(0, 300)}`);
@@ -410,6 +427,10 @@ async function runSegInferenceSession(imagePath, outdir) {
     return await segSession.call({ image: imagePath, outdir: outdir || '' },
       { timeoutMs: SEG_SESSION_TIMEOUT_MS, prefix: 'seg' });
   } catch (err) {
+    // The worker's MATLAB engine failed: not a reason to re-run the same
+    // models in a fresh process (it would ask the same session again) and
+    // never a reason to degrade silently -- see runSegInference.
+    if (err.code === 'matlab_segmentation_failed') throw matlabSegmentationFailed(err.message);
     console.warn(`[gradingOrchestrator] the segmentation worker could not handle `
       + `this image (${err.message}); falling back to a fresh segInfer.py process, `
       + 'which costs this case about 17 s of model loading');
@@ -420,9 +441,10 @@ async function runSegInferenceSession(imagePath, outdir) {
 /**
  * segment(imagePath, outdir) -- Branch B's input, from whichever path is up.
  *
- * Resolves NULL on any failure of BOTH paths, never throws: see
- * runSegInference's header for why losing Branch B must degrade a case rather
- * than fail it.
+ * Resolves NULL on any failure of BOTH paths: see runSegInference's header for
+ * why losing Branch B must degrade a case rather than fail it. The one thing
+ * that throws is a MATLAB-engine failure (matlab_segmentation_failed), for the
+ * reason given there.
  */
 async function segment(imagePath, outdir) {
   if (segSession.alive()) {
@@ -737,10 +759,11 @@ async function gradeCase(caseId, plainImagePath) {
   // Grad-CAM is produced inside the Branch A call rather than a second spawn:
   // interpreter start and model load dominate the cost.
   //
-  // Promise.all and not allSettled: runSegInference never rejects, it resolves
-  // NULL on failure, because Branch B is the second opinion and losing it must
-  // degrade the result rather than fail the case. A Branch A failure DOES
-  // reject, and should — without it there is no grade at all.
+  // Promise.all and not allSettled: segment() resolves NULL on an ordinary
+  // failure, because Branch B is the second opinion and losing it must degrade
+  // the result rather than fail the case. A Branch A failure DOES reject, and
+  // should — without it there is no grade at all. So does a segmentation MATLAB-
+  // engine failure (matlab_segmentation_failed): see runSegInference.
   //
   // Backend switch (INFERENCE_BACKEND=python|matlab, default python): both
   // functions resolve to the identical JSON shape, so nothing below this line

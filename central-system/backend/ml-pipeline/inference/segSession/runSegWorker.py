@@ -110,7 +110,13 @@ def handle(req_path, segInfer):
         # BaseException, not Exception: segInfer._fail() raises SystemExit for a
         # missing checkpoint, and a worker that exited on one bad request would
         # take every queued case with it.
-        write_atomic(resp_path, json.dumps({"error": f"{type(exc).__name__}: {exc}"}))
+        body = {"error": f"{type(exc).__name__}: {exc}"}
+        # A MATLAB-engine failure is not "segmentation could not run": the
+        # backend must fail or retry the case, not degrade it to classifier-only
+        # (no silent engine fallback). The code is what lets it tell the two apart.
+        if isinstance(exc, segInfer.MatlabEngineFailed):
+            body["code"] = "matlab_segmentation_failed"
+        write_atomic(resp_path, json.dumps(body))
         log(f"  request {req_id} FAILED ({(time.time() - started) * 1000:.0f} ms): {exc}")
         log(traceback.format_exc().strip())
     finally:

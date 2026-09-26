@@ -94,7 +94,14 @@ function createSessionClient({ dir, heartbeatFile, staleMs = 30_000, label = 'wo
             return reject(new Error(`${label} response JSON parse failed: ${err.message}`));
           }
           removeQuietly(respPath);
-          if (body && body.error) return reject(new Error(body.error));
+          if (body && body.error) {
+            // The worker's own classification, when it gives one (e.g. the seg
+            // worker's matlab_segmentation_failed), so the caller can tell a
+            // failed engine from an unreadable image.
+            const err = new Error(body.error);
+            if (typeof body.code === 'string' && body.code) err.code = body.code;
+            return reject(err);
+          }
           return resolve(body);
         }
         if (Date.now() - startedAt > timeoutMs) {
