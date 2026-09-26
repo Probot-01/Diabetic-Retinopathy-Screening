@@ -107,7 +107,11 @@ No app has a built-in server URL: an unset URL is reported as an error on screen
 - **`live`** (default): every screen calls the real backend. A failed request shows an error state. It is never replaced with mock data.
 - **`mock`**: fixture data only, no backend needed, with a permanent **"DEMO DATA — not real results"** banner on every page.
 
-Nothing switches between the two automatically. A Vercel deployment with no backend must set `VITE_DATA_MODE=mock` explicitly, and it will then carry the banner.
+Nothing switches between the two at runtime. The Vercel demo deployments are
+set to mock in each frontend's `vercel.json`
+(`buildCommand: VITE_DATA_MODE=${VITE_DATA_MODE:-mock} npm run build`), so they
+carry the banner. Setting `VITE_DATA_MODE=live` in the Vercel project's env
+vars overrides this.
 
 ### Running a service on its own
 
