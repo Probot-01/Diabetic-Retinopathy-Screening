@@ -84,6 +84,8 @@ Ctrl+C stops the four services. Postgres keeps running (`npm run db:down` stops 
 
 `npm run dev:check` does the same, prints the summary, then stops the services and exits non-zero if anything is unhealthy.
 
+Stored images are encrypted with `MEDIA_ENCRYPTION_KEY`, which lives only in `central-system/backend/.env` (git-ignored). **If the key is lost**, generate a new one and reset the demo; the demo data is public-dataset images and fully regenerable. There's no `demo-reset` command yet, so run `npm run db:down -- -v`, empty `central-system/backend/media/`, set the new key, and run `npm run dev:all` (see `docs/SECURITY.md`).
+
 Lost the printed credentials? `node scripts/seed-demo.js --force --write-phc-env` issues new ones (the old ones stop working).
 
 ### Configuration

@@ -31,7 +31,7 @@ compliance claim. Last reviewed 2026-09-26.
 | `POST /auth/*`, `GET /health` | anyone |
 | `POST /notifications/sms-status` | Twilio request signature |
 
-`/media` is served by `routes/media.js`, not `express.static`. It applies auth and role checks, blocks path traversal and in-flight chunk fragments, decrypts files, and writes an access-log row.
+`/media` is served by `routes/media.js`, not `express.static`. It applies auth and role checks, blocks path traversal and in-flight chunk fragments, and writes an access-log row. It serves **encrypted files only**: a plaintext file under `media/` gets `500 media_not_encrypted`, not its bytes. The 259 pre-encryption files were moved to `central-system/backend/media-archive/` (git-ignored, never served).
 
 ### PHC device keys
 - Each site has its own key, sent as `X-PHC-Api-Key` and checked by `middleware/requirePhcApiKey.js:48`. Enforced when `PHC_AUTH_ENABLED=true`. An invalid key is always rejected.
@@ -73,6 +73,7 @@ Limits:
 ## Not covered (be honest about these)
 - **TLS comes from the reverse proxy in deployment** (nginx, Caddy, or the platform's load balancer terminating HTTPS). Local dev is plain HTTP on localhost, hence `COOKIE_SECURE=false` there. The backend *can* serve TLS itself (`TLS_KEY_PATH`/`TLS_CERT_PATH`, self-signed via `scripts/generateDevCert.js`), but that is a demo convenience, not the deployment plan.
 - **Database encryption relies on the host disk**: BitLocker, LUKS, or the provider's "encryption at rest" setting. Postgres here has no transparent data encryption and no column-level encryption (e.g. `pgcrypto`). Patient rows (names, ages, phone numbers, questionnaires) are plaintext to anyone who can read the database or its disk. Disk encryption protects a stolen disk, not a compromised running server.
+- **If `MEDIA_ENCRYPTION_KEY` is lost:** generate a new one and reset the demo. All demo data is public-dataset images and can be fully regenerated. There is no `demo-reset` command yet, so the reset is: `npm run db:down -- -v` (drops the database volume), empty `central-system/backend/media/`, set the new key, then `npm run dev:all` and re-capture. Keep the key in `.env` only (git-ignored) and in a password manager.
 - **The media key sits in the same `.env` as everything else.** There is no KMS or HSM and no key rotation. Anyone who can read the server's `.env` can decrypt the media. Losing the key makes every encrypted file unreadable.
 - **During grading, the image exists in plaintext** in the OS temp directory: Python and MATLAB read by path and cannot decrypt. It is deleted when grading or report generation ends, but a crash mid-grading can leave it behind.
 - **Other files under the backend are not encrypted:** `explainability-outputs/`, `ml-pipeline` temp and session request files, and the log files.
