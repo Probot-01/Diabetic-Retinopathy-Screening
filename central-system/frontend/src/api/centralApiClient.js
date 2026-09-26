@@ -28,24 +28,40 @@ export class ApiError extends Error {
  * the demo one", no fabricated success (design doc §1.22). Every screen that
  * calls this client renders the rejection as an error state.
  */
+/**
+ * Fired on window whenever a live call comes back 401 (session missing or
+ * expired, account deactivated). App.jsx listens and sends the user to login.
+ */
+export const UNAUTHENTICATED_EVENT = 'netrasetu:unauthenticated';
+
+const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
 class CentralApiClient {
   constructor() {
+    // '' = same origin: the browser calls /api and /media on the page's own
+    // origin, and the Vite dev proxy (or the deployment's reverse proxy)
+    // forwards them to the backend. That is also what makes the session
+    // cookie a first-party cookie on <img> requests.
     this.baseUrl = CENTRAL_API_BASE;
+    // From the login / auth/me response body; sent as X-CSRF-Token on every
+    // state-changing call (api-contracts.md, "Rules for every browser call").
+    // Kept in memory only, never in storage.
+    this.csrfToken = null;
   }
 
   async _fetch(path, options = {}, timeoutMs = REAL_CALL_TIMEOUT_MS) {
-    if (!this.baseUrl) {
-      throw new ApiError('config_missing',
-        'VITE_CENTRAL_API_BASE is not set, so this app does not know where the central server is. ' +
-        'Set it in central-system/frontend/.env and restart the dev server.');
-    }
+    const method = (options.method || 'GET').toUpperCase();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res;
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
         ...options,
-        headers: { 'Content-Type': 'application/json', ...options.headers },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(UNSAFE_METHODS.has(method) && this.csrfToken ? { 'X-CSRF-Token': this.csrfToken } : {}),
+          ...options.headers,
+        },
         // The session is an httpOnly cookie (api-contracts.md, "Rules for
         // every browser call"); without this it is never sent.
         credentials: 'include',
@@ -55,16 +71,52 @@ class CentralApiClient {
       if (err.name === 'AbortError') {
         throw new ApiError('timeout', `The central server did not answer within ${Math.round(timeoutMs / 1000)} s (${path}).`);
       }
-      throw new ApiError('network_error', `Cannot reach the central server at ${this.baseUrl}. Is it running?`);
+      throw new ApiError('network_error',
+        `Cannot reach the central server${this.baseUrl ? ` at ${this.baseUrl}` : ''}. Is it running?`);
     } finally {
       clearTimeout(timer);
     }
     if (!res.ok) {
       const body = await res.json().catch(() => null);
+      // A 401 anywhere except the auth endpoints themselves means the session
+      // is gone: hand the user back to the login page.
+      if (res.status === 401 && !path.startsWith('/api/v1/auth/')) {
+        this.csrfToken = null;
+        window.dispatchEvent(new CustomEvent(UNAUTHENTICATED_EVENT));
+      }
       throw new ApiError(body?.error || `http_${res.status}`,
         body?.message || `${res.status} ${res.statusText} from ${path}`, res.status);
     }
+    if (res.status === 204) return null;
     return res.json();
+  }
+
+  // ── Session (api-contracts.md, "Authentication") ──
+
+  /** POST /auth/login -> { user, csrfToken, expiresAt }; sets the httpOnly cookie. */
+  async login(email, password) {
+    const body = await this._fetch('/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    this.csrfToken = body.csrfToken;
+    return body;
+  }
+
+  /** GET /auth/me -> same body as login, or ApiError 401 when not logged in. */
+  async me() {
+    const body = await this._fetch('/api/v1/auth/me');
+    this.csrfToken = body.csrfToken;
+    return body;
+  }
+
+  /** POST /auth/logout -> clears the cookie. */
+  async logout() {
+    try {
+      await this._fetch('/api/v1/auth/logout', { method: 'POST' });
+    } finally {
+      this.csrfToken = null;
+    }
   }
 
   // ── Ophthalmologist ──
