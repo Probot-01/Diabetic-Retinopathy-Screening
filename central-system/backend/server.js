@@ -77,11 +77,14 @@ app.use((req, res, next) => {
 });
 
 // GET /health is what the PHC sync manager polls as its network heartbeat
-// before every transmission attempt (design doc §4.2), so it must stay
-// dependency-free: no DB query, no MATLAB call. A health check that touches
-// Postgres would report "offline" during a transient DB blip and stall every
-// PHC's queue for reasons unrelated to reachability.
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+// before every transmission attempt (design doc §4.2), so its top-level
+// `status` stays 'ok' whenever this process answers: a Postgres blip or a
+// restarting MATLAB session must not report the PHC "offline" and stall every
+// queue. It ALSO reports each dependency separately (db, queue, MATLAB
+// session, Python), each probe time-bounded or cached -- see healthCheck.js.
+app.get('/health', async (req, res, next) => {
+  try { res.json(await require('./services/healthCheck').report()); } catch (err) { next(err); }
+});
 
 // Auth is applied PER ROUTE inside each router, not here (backend plan §A.11):
 // /auth/login and the PHC ingestion routes must stay reachable without a
@@ -163,6 +166,9 @@ if (require.main === module) {
   // Same, for the Python segmentation worker. Its failure is the quiet one:
   // grading keeps working and every case just takes 17 s longer.
   require('./services/segWorkerSupervisor').start();
+  // GET /health's Python check is a cached background probe; take the first
+  // one now so the first health call is not 'unknown'.
+  require('./services/healthCheck').probePython();
   // §G: daily district resource-model run (RESOURCE_MODEL_CRON).
   require('./services/resourceRecommendations').start();
   // §G.2's other half: the weekly SimEvents run that keeps the reference

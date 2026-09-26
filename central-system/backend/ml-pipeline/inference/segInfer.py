@@ -10,6 +10,8 @@ same reason as branchAInfer.py: Node parses stdout as JSON, so a traceback
 printed there is read as a malformed result instead of a failure.
 
 Exit codes:  0 success   2 bad arguments   3 inference failed
+             4 the MATLAB session failed a forward pass and the PyTorch
+               fallback is off (SEG_ALLOW_PYTHON_FALLBACK unset)
 
 ── WHY ALL FOUR RUN IN ONE PROCESS ─────────────────────────────────────────
 Interpreter start plus four model loads dominates the cost; four spawns would
@@ -197,17 +199,34 @@ def _forward(model, x):
 # copy of it. M5 (red_lesion) is NOT converted for serving -- its conversion is
 # the old 2-class model the 3-class retrain replaces -- so it always runs here.
 #
-# A session failure falls back to PyTorch for that call and is RECORDED in the
-# output (segBackend), never silent: tensor parity was verified at 2e-6..4e-5,
-# so the fallback changes where the numbers came from, not what they are, and
-# losing Branch B entirely over a restarting session would be worse.
+# A session failure FAILS segmentation (exit code 4, MatlabEngineFailed) --
+# standing rule: no silent engine fallback. The case then fails visibly or is
+# retried by the grading queue, rather than quietly running on PyTorch.
+#
+# SEG_ALLOW_PYTHON_FALLBACK=1 opts back in to the PyTorch fallback (tensor
+# parity was verified at 2e-6..4e-5, so it changes where the numbers came
+# from, not what they are). Even then it is never silent: every model's engine
+# is reported in the output's `engines` block and stored per case as engine
+# provenance, with fallback: true.
 SEG_BACKEND = os.environ.get("SEG_INFERENCE_BACKEND", "matlab").strip().lower()
+SEG_ALLOW_PYTHON_FALLBACK = os.environ.get("SEG_ALLOW_PYTHON_FALLBACK", "") == "1"
 _MATLAB_NETS = {
     "vessel": "vessel_unet_v1",
     "localization": "localization_v1",
     "hard_exudate": "bright_lesion_unet_v1",
 }
+# Which engine produced each role's forward pass, for the CURRENT run_one call
+# only -- reset at its start, because the segmentation worker calls run_one
+# many times in one process and a stale entry would misattribute a case.
 BACKEND_USED = {}
+
+EXIT_MATLAB_FAILED = 4
+
+
+class MatlabEngineFailed(RuntimeError):
+    """The MATLAB session could not run a forward pass, and the PyTorch
+    fallback is not enabled. Distinct from every other failure so the backend
+    can fail (or retry) the case instead of degrading it to classifier-only."""
 
 
 def _run(role, x):
@@ -216,15 +235,36 @@ def _run(role, x):
         try:
             from matlabSessionClient import forward
             out = forward(_MATLAB_NETS[role], x)
-            BACKEND_USED[role] = "matlab"
+            BACKEND_USED[role] = {"engine": "matlab", "fallback": False,
+                                  "detail": f"MATLAB session forward pass ({_MATLAB_NETS[role]})"}
             return out
-        except Exception as exc:  # noqa: BLE001 - recorded, then fall back
+        except Exception as exc:  # noqa: BLE001 - fail, or fall back only when allowed
+            if not SEG_ALLOW_PYTHON_FALLBACK:
+                raise MatlabEngineFailed(
+                    f"MATLAB session failed for {role} ({exc}); "
+                    "SEG_ALLOW_PYTHON_FALLBACK is not set, so not falling back to PyTorch"
+                ) from exc
             print(f"segInfer: MATLAB session failed for {role} ({exc}); "
-                  "falling back to PyTorch", file=sys.stderr)
-            BACKEND_USED[role] = f"python (matlab failed: {exc})"
+                  "falling back to PyTorch (SEG_ALLOW_PYTHON_FALLBACK=1)", file=sys.stderr)
+            BACKEND_USED[role] = {"engine": "python", "fallback": True,
+                                  "detail": f"PyTorch after MATLAB failed: {exc}"[:300]}
     else:
-        BACKEND_USED[role] = "python"
+        detail = ("PyTorch; not converted for MATLAB serving"
+                  if role not in _MATLAB_NETS else "PyTorch (SEG_INFERENCE_BACKEND=python)")
+        BACKEND_USED[role] = {"engine": "python", "fallback": False, "detail": detail}
     return _forward(load(role)[0], x)
+
+
+def engines_used():
+    """{vessel, localization, hardExudate, redLesion} -> the engine entry for
+    each model that ran in this call, None for one that did not."""
+    red = BACKEND_USED.get("red_lesion_v2") or BACKEND_USED.get("red_lesion")
+    return {
+        "vessel": BACKEND_USED.get("vessel"),
+        "localization": BACKEND_USED.get("localization"),
+        "hardExudate": BACKEND_USED.get("hard_exudate"),
+        "redLesion": red,
+    }
 
 
 def fovea_unreliable(heatmap):
@@ -365,6 +405,10 @@ def _lesion_prob_v2(role, rgb512):
     # which is exactly the bug this comment is now guarding against.
     # PyTorch directly, not _run(): the 3-class model has no MATLAB
     # conversion, so the dispatch would only add a lookup that always misses.
+    # Its provenance is still recorded, here, for the same reason _run records
+    # every other model's.
+    BACKEND_USED[role] = {"engine": "python", "fallback": False,
+                          "detail": "PyTorch; not converted for MATLAB serving"}
     logits = _forward(load(role)[0], x.transpose(2, 0, 1)[None, ...])  # (3, H, W)
     e = np.exp(logits - logits.max(axis=0, keepdims=True))
     return e / e.sum(axis=0, keepdims=True)
@@ -560,6 +604,7 @@ def run_one(image, outdir=None, min_area=DEFAULT_MIN_AREA):
     the worker had nothing to call, and a merge that dropped it would have
     taken the warm path down without any test noticing.
     """
+    BACKEND_USED.clear()
     bgr = cv2.imread(image, cv2.IMREAD_COLOR)
     if bgr is None:
         _fail(f"could not read image: {image}")
@@ -690,6 +735,9 @@ def run_one(image, outdir=None, min_area=DEFAULT_MIN_AREA):
             "bright": save_mask(bright, os.path.join(outdir, base + "_bright.png")),
         }
 
+    # Which engine produced each model's output -- stored per case as engine
+    # provenance (grading_results.engine_provenance). Additive key.
+    out["engines"] = engines_used()
     return out
 
 
@@ -713,6 +761,8 @@ def main():
         return 0
     except SystemExit:
         raise
+    except MatlabEngineFailed as exc:
+        _fail(f"MatlabEngineFailed: {exc}", code=EXIT_MATLAB_FAILED)
     except Exception as exc:  # noqa: BLE001 - must not leak a traceback to stdout
         _fail(f"{type(exc).__name__}: {exc}")
 

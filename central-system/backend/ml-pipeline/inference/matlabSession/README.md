@@ -16,8 +16,9 @@ error pointing back here.
 
 ## What it is
 
-- `runMatlabInferenceSession.m` — the server. Loads all 5 project networks
-  once, then polls `requests/` for work and writes to `responses/`. Never
+- `runMatlabInferenceSession.m` — the server. Loads only the networks its
+  configured backends need (the classifier when `INFERENCE_BACKEND=matlab`,
+  M2-M4 when `SEG_INFERENCE_BACKEND=matlab`) once, then polls `requests/` for work and writes to `responses/`. Never
   daemonizes itself.
 - `manageMatlabSession.ps1` — the actual start/stop/status interface. Use
   this, not `runMatlabInferenceSession.m` directly.

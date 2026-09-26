@@ -223,10 +223,12 @@ async function handleCapture(patientId, imageFile, cameraDeviceId = 'unknown') {
     // apply one fixed chain to every image, which is what "adaptive" was
     // supposed to stop.
     db.prepare(`
-      UPDATE captures SET quality_status = ?, quality_reason = ?, quality_scores = ?
+      UPDATE captures SET quality_status = ?, quality_reason = ?, quality_scores = ?,
+                          quality_engine = ?
       WHERE capture_id = ?
     `).run(gate.status, gate.reason,
            gate.scores ? JSON.stringify(gate.scores) : null,
+           gate.engine ? JSON.stringify(gate.engine) : null,
            captureId);
 
     // Only pass/borderline get queued. A 'retake' is not a case -- the

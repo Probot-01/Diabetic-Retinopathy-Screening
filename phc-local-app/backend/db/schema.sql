@@ -35,7 +35,11 @@ CREATE TABLE IF NOT EXISTS captures (
   -- The gate's six sub-scores, as a JSON string. Previously computed, logged,
   -- and thrown away. Task 2.8's adaptive enhancement runs centrally and needs
   -- them to decide WHICH fault to correct, so they have to survive the trip.
-  quality_scores   TEXT
+  quality_scores   TEXT,
+  -- Which engine ran the gate: {"engine","fallback","detail"} as a JSON string
+  -- (engine provenance -- matlab, or js-fallback only with
+  -- QUALITY_GATE_ALLOW_FALLBACK=1). Sent to central as qualityGateEngine.
+  quality_engine   TEXT
 );
 
 -- Patient symptom + risk answers (design doc §9.1) -- about the PATIENT.

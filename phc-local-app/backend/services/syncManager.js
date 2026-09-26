@@ -186,6 +186,11 @@ function buildCaseFields({ capture, patient, questionnaire, metadata }) {
   if (capture.quality_scores) {
     fields.qualityScores = capture.quality_scores;
   }
+  // Which engine ran the gate (engine provenance). Absent for captures gated
+  // before this was stored; central records those as "not recorded".
+  if (capture.quality_engine) {
+    fields.qualityGateEngine = capture.quality_engine;
+  }
 
   // Lets the central server keep phc_sites.pending_count current, which is what
   // the admin PHC Health screen reads. Counted BEFORE this upload succeeds, so
