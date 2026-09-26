@@ -206,6 +206,23 @@ function ensureEnvFiles() {
     fs.copyFileSync(rel(`${dir}/.env.example`), env);
     ok(`${dir}/.env created from .env.example`);
   }
+
+  // Secrets the central backend needs that must never be committed: generated
+  // here, per machine, only when the line is present and empty.
+  const centralEnv = rel(`${SERVICE_DIRS.centralApi}/.env`);
+  let text = fs.readFileSync(centralEnv, 'utf8');
+  const generated = [];
+  for (const [key, make] of [
+    ['JWT_SECRET', () => require('crypto').randomBytes(48).toString('base64url')],
+    ['MEDIA_ENCRYPTION_KEY', () => require('crypto').randomBytes(32).toString('hex')],
+  ]) {
+    const re = new RegExp(`^${key}=[ \\t]*$`, 'm');
+    if (re.test(text)) { text = text.replace(re, `${key}=${make()}`); generated.push(key); }
+  }
+  if (generated.length) {
+    fs.writeFileSync(centralEnv, text);
+    ok(`generated ${generated.join(' and ')} in ${SERVICE_DIRS.centralApi}/.env (keep MEDIA_ENCRYPTION_KEY: without it encrypted media is unreadable)`);
+  }
 }
 
 function ensureInstalled() {

@@ -94,7 +94,10 @@ let running = false;   // guards against a slow cycle overlapping the next tick
 async function isOnline() {
   if (!CENTRAL_URL) return false;
   try {
+    // /health is public; the key rides along anyway so EVERY call this PHC
+    // makes to central is identifiable as coming from it.
     const res = await fetch(`${CENTRAL_URL}/health`, {
+      headers: centralHeaders(),
       signal: AbortSignal.timeout(HEALTH_TIMEOUT),
     });
     return res.ok;
