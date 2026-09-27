@@ -163,8 +163,9 @@ test('1. while both are on: work done on the desktop is already on the phone', a
   const imgPath = path.join(PC_ENV.LOCAL_STORAGE_DIR, `${deskCaptureId}.jpg`);
   fs.writeFileSync(imgPath, img);
   const w = new Database(PC_ENV.LOCAL_DB_PATH);
-  w.prepare(`INSERT INTO captures (capture_id, patient_id, camera_device_id, image_path, quality_status, quality_reason, retake_count, captured_at, quality_scores)
-             VALUES (?, ?, 'remidio_fop', ?, 'pass', NULL, 0, ?, ?)`).run(deskCaptureId, deskPatientId, imgPath, new Date().toISOString(), JSON.stringify(PASS.scores));
+  w.prepare(`INSERT INTO captures (capture_id, patient_id, camera_device_id, image_path, quality_status, quality_reason, retake_count, captured_at, quality_scores, quality_engine)
+             VALUES (?, ?, 'remidio_fop', ?, 'pass', NULL, 0, ?, ?, ?)`).run(deskCaptureId, deskPatientId, imgPath, new Date().toISOString(), JSON.stringify(PASS.scores),
+    JSON.stringify({ engine: 'matlab', fallback: false, detail: 'qualityGateMain.m via matlab -batch' }));
   w.prepare(`INSERT INTO sync_queue (queue_id, capture_id, status, priority) VALUES (?, ?, 'pending', 'low')`).run(`q-${deskCaptureId}`, deskCaptureId);
   w.close();
 
@@ -175,6 +176,7 @@ test('1. while both are on: work done on the desktop is already on the phone', a
   assert.equal(p.name, 'Desk Registered');
   const c = await caps.getCapture(deskCaptureId);
   assert.equal(c.qualityStatus, 'pass');
+  assert.equal(c.qualityEngine?.engine, 'matlab', "the PC's gate engine survives the trip to the phone");
   assert.equal(sha(fs.readFileSync(new URL(c.imagePath))), deskImageSha, 'image bytes identical on the phone');
   assert.equal((await getPairing()).lastUrl, base, 'fell through the dead address to the live one');
 });
@@ -213,6 +215,8 @@ test('4. POWER BACK: everything captured during the outage reaches the PC, image
     assert.equal(JSON.parse(p.questionnaire_json).glycemicControl, 'poor');
     const c = db.prepare('SELECT * FROM captures WHERE capture_id = ?').get(outageCase.captureId);
     assert.equal(c.source, 'lens');
+    assert.equal(JSON.parse(c.quality_engine).engine, 'js-device', "the phone's gate engine survives the trip to the PC");
+    assert.equal(JSON.parse(c.quality_engine).fallback, false);
     assert.equal(sha(fs.readFileSync(c.image_path)), sha(fs.readFileSync(path.join(DEMO, '1_quality_pass.jpg'))));
     assert.ok(db.prepare('SELECT 1 FROM questionnaire_responses WHERE capture_id = ?').get(outageCase.captureId));
     assert.equal(db.prepare('SELECT eye_laterality FROM capture_metadata_responses WHERE capture_id = ?').get(outageCase.captureId).eye_laterality, 'right');
