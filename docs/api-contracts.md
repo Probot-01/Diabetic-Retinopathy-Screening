@@ -19,6 +19,8 @@
 Kept because this file is the tie-breaker: when it changes, the code and both
 plans have to be re-checked against it, and a silent edit makes that impossible.
 
+**2026-09-27 (later) — `GET /api/v1/admin/phcs`.** Lists every PHC site with its recent activity (district_admin). It gives the PHC Health page a real data source; that table used to say "no live data source yet". Adds nullable `phc_sites.phc_code` and `phc_sites.district` (migration 0020); both are reported as `null` until someone records them. New optional env `PHC_SILENT_HOURS` (default 24).
+
 **2026-09-27 — Reviewer and admin flows, verified against real cases.**
 - **Lesion evidence is two families, red and bright.** `lesionCounts.microaneurysms` and `hemorrhages` are the breakdown of the red family, and are real numbers under M5 v2 (`null` under v1). `hardExudates` is the bright family. **`softExudates` is deprecated:** it stays in the response for wire compatibility, is always `null`, and no UI renders it, because nothing detects cotton-wool spots. It will be removed once the mobile app stops reading it.
 - **`lesionCounts.detail.redTotal` is now the sum of `redPerQuadrant`.** It used to be the older whole-mask count, which under M5 v2 differed from the quadrant counts the rule engine and the evidence text use (for example 15 against 18).
@@ -647,6 +649,20 @@ District admin. One call returns four checks: silent PHCs, stuck grading jobs, t
 - **`stuckJobs`:** a case appears when it is still processing long after it arrived. The automatic watchdog re-queues such cases up to 3 times; once `autoRecoveryExhausted` is `true`, it needs a human.
 - **`matlabSessionStatus`:** one of `"healthy" | "restarting" | "down" | "disabled"`. The supervisor restarts the session itself. It reports `"down"`, and raises an alert, when restarting has not worked.
 - **`unreviewedCases`:** referable cases that have never been reviewed, older than `unreviewedCaseHours`.
+
+### `GET /api/v1/admin/phcs`  *(added 2026-09-27)*
+District admin (401 with no session, 403 for any other role, like every `/admin` route). One item per row of `phc_sites`, ordered by name; `[]` when no site is registered.
+```json
+[ { "phcId": "7b395269-…", "phcCode": "PHC001", "name": "PHC Kharadi", "district": null,
+    "lastSyncAt": "2026-09-26T11:39:54.594Z", "casesLast24h": 8,
+    "pendingOrFailedCount": 1, "status": "active" } ]
+```
+- **`phcCode`, `district`:** `null` when not recorded. Nothing is guessed.
+- **`lastSyncAt`:** the latest case **central received** from that site, or `null` if it has never sent one. It is not `phc_sites.last_sync_at`, which keeps its own narrower meaning (full-sync completion, used by `GET /phc/:phcId/sync-status`).
+- **`casesLast24h`:** cases received from the site in the last 24 hours.
+- **`pendingOrFailedCount`:** what the PHC last reported as still queued (`pending_count`, accurate only as of its last contact) **plus** the site's cases whose grading failed here (status `error`).
+- **`status`:** `"silent"` when `lastSyncAt` is `null` or older than `PHC_SILENT_HOURS` (default 24), otherwise `"active"`. This is a different threshold from `silentPhcHours` in `GET /admin/system-health` (48 h, contact of any kind); the two answer different questions.
+- **The API key and its hash are never returned.**
 
 ### `GET /api/v1/phc/:phcId/sync-status`
 *(2026-09-20)* Response also includes `lastContactAt` (`string|null`).
