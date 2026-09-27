@@ -28,6 +28,8 @@ function outPath = generateReport(inputJsonPath, outPath)
 % Both write the same file; the fallback exists so a machine without the
 % toolbox still produces a report rather than failing the request.
 
+ensureReportGeneratorOnPath();   % this process only; never touches the saved path
+
 if ~reportGeneratorAvailable()
     warning('generateReport:fallback', ...
         ['MATLAB Report Generator is unavailable; rendering with the core-MATLAB ' ...
@@ -194,12 +196,17 @@ end
 
 % ── Availability ────────────────────────────────────────────────────────────
 function tf = reportGeneratorAvailable()
-% Both halves matter: the classes can exist while the licence is out.
+% Three things must hold: the classes exist, the licence checks out, AND the
+% product is actually installed. The classes ship with core MATLAB and the
+% licence can be valid on a machine where the product was never installed, in
+% which case only open(Document) fails -- with "not installed", as a hard
+% error instead of taking the fallback renderer below.
 tf = false;
 if exist('mlreportgen.dom.Document', 'class') ~= 8, return; end
 try
     tf = license('test', 'MATLAB_Report_Gen') == 1 ...
-         && builtin('license', 'checkout', 'MATLAB_Report_Gen') == 1;
+         && builtin('license', 'checkout', 'MATLAB_Report_Gen') == 1 ...
+         && ~isempty(ver('rptgen'));
 catch
     tf = false;
 end
