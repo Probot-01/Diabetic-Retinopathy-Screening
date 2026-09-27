@@ -60,6 +60,10 @@ Every graded case stores this per output as `engineProvenance` (see
   Each network also needs its generated `models/+<name>/` package folder on the
   path (tracked in git).
 
+### Not installed here, and needed by one feature
+
+- **MATLAB Report Generator.** `explainability/generateReport.m` (the downloadable evidence-report PDF behind `GET /api/v1/cases/:caseId/report`) uses `mlreportgen.dom`, which needs this product. It is **not installed on this machine**, so the report fails with a 502 and the Case Detail button shows the failure. Grading does not depend on it, which is why it is absent from the licensed-products table above. A deployment that serves reports must install it.
+
 ### Installed here but not needed by grading
 
 | Product | Used by | Needed for a grading deployment? |

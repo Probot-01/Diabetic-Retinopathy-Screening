@@ -3,6 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { centralApi } from '../../api/centralApiClient';
 import { LoadError } from '../shared/LoadError';
 
+// One decimal for display; the model returns full floats. null stays null.
+const round1 = (v) => (typeof v === "number" ? Math.round(v * 10) / 10 : v);
+
 export const ResourceRecommendationsPanel = () => {
   const { t } = useTranslation();
   const [recommendations, setRecommendations] = useState(null);
@@ -75,7 +78,12 @@ export const ResourceRecommendationsPanel = () => {
           </button>
         </div>
         {notRunYet
-          ? <p className="t-mono">The district resource model has not run on this server yet. It runs daily, or now with the button above.</p>
+          ? (
+            <div role="status">
+              <p className="t-mono" style={{ fontWeight: 700 }}>Simulation results not yet generated.</p>
+              <p className="t-mono">The district resource model has not run on this server yet. It runs daily, or now with the button above. No figures are shown until it has.</p>
+            </div>
+          )
           : <LoadError error={recError} what="resource recommendations" />}
         {valError && valError.code !== 'validation_not_run' && <LoadError error={valError} what="the Simulink validation" />}
       </div>
@@ -212,10 +220,10 @@ export const ResourceRecommendationsPanel = () => {
           <div className="stat hash-fill">
             <div className="stat__label">CURRENT REVIEW WAIT (P95)</div>
             <div className="stat__value" style={{ color: isOverTarget ? '#A82222' : '#14B8A6' }}>
-              {current.reviewWaitP95Min} <span style={{ fontSize: '14px' }}>min</span>
+              {round1(current.reviewWaitP95Min)} <span style={{ fontSize: '14px' }}>min</span>
             </div>
             <div className="stat__delta" style={{ color: isOverTarget ? '#A82222' : 'var(--c-success)' }}>
-              {isOverTarget ? `+${current.reviewWaitP95Min - recommendations.p95TargetMin}m over SLA target` : 'Within SLA target'}
+              {isOverTarget ? `+${round1(current.reviewWaitP95Min - recommendations.p95TargetMin)}m over SLA target` : 'Within SLA target'}
             </div>
           </div>
         </div>
@@ -224,10 +232,10 @@ export const ResourceRecommendationsPanel = () => {
           <div className="stat hash-fill">
             <div className="stat__label">REVIEW POOL UTILIZATION</div>
             <div className="stat__value">
-              {current.reviewUtilisationPct}%
+              {round1(current.reviewUtilisationPct)}%
             </div>
             <div className="stat__delta" style={{ color: current.reviewUtilisationPct > 70 ? 'var(--c-warning)' : 'var(--c-success)' }}>
-              Upload bandwidth: {current.uploadUtilisationPct}% ({current.uploadWaitP95Min}m wait)
+              Upload bandwidth: {round1(current.uploadUtilisationPct)}% ({round1(current.uploadWaitP95Min)}m wait)
             </div>
           </div>
         </div>

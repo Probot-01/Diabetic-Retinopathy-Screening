@@ -46,9 +46,20 @@ function totalOf(arr) {
   return arr.reduce((a, b) => a + b, 0);
 }
 
-/** A stored total if it is a real number, else the sum of the quadrants. */
+/**
+ * The lesion total to report: the SUM OF THE QUADRANT COUNTS when they are
+ * present, else the stored total.
+ *
+ * The quadrant counts are the numbers the rule engine grades on and the
+ * evidence text quotes, so the total has to be their sum. The stored
+ * redTotal is segInfer's older whole-mask component count and, under M5 v2,
+ * does not equal that sum (measured on real cases: 15 vs 18, 1 vs 5, 22 vs
+ * 27) -- which put a lesion panel total beside a breakdown that added up to
+ * something else.
+ */
 function pickTotal(stored, quadrants) {
-  return Number.isFinite(stored) ? stored : totalOf(quadrants);
+  const fromQuadrants = totalOf(quadrants);
+  return fromQuadrants !== null ? fromQuadrants : (Number.isFinite(stored) ? stored : null);
 }
 
 /**

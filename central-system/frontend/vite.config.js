@@ -26,7 +26,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     // Pinned, and strict: the backend's CORS allow-list and the dev-up health
     // check name this exact port; drifting when it is taken would break both.
-    server: { port: 5174, strictPort: true, proxy },
+    // CENTRAL_WEB_PORT lets a second checkout run beside this one (default 5174).
+    server: { port: Number(env.CENTRAL_WEB_PORT) || 5174, strictPort: true, proxy },
     preview: { port: 4174, strictPort: true, proxy },
   }
 })

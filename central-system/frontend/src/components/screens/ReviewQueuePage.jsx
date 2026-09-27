@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { centralApi } from '../../api/centralApiClient';
 import { drGradeLabels } from '../../api/mockData';
+import { USE_MOCK_DATA } from '../../config';
 import { InfoBanner } from '../shared/InfoBanner';
 import { LoadError } from '../shared/LoadError';
 
@@ -152,10 +153,13 @@ export const ReviewQueuePage = () => {
         const parsed = JSON.parse(saved);
         if (parsed.sortListsBy === 'Urgency') return { key: 'urgencyScore', direction: 'desc' };
         if (parsed.sortListsBy === 'Date') return { key: 'capturedAt', direction: 'desc' };
-        if (parsed.sortListsBy === 'PHC') return { key: 'phc_name', direction: 'asc' };
+        if (parsed.sortListsBy === 'PHC') return { key: 'phcName', direction: 'asc' };
       }
     } catch (e) {}
-    return { key: 'capturedAt', direction: 'desc' };
+    // DEFAULT = the server's priority order (design doc §5.2): Tier C by
+    // uncertainty (branch disagreements are forced into Tier C), then Tier B.
+    // It used to default to capture time, which threw that ordering away.
+    return { key: 'priorityRank', direction: 'asc' };
   });
 
   const isCompact = localStorage.getItem('netrasetu_compact_table') === 'true';
@@ -214,6 +218,8 @@ export const ReviewQueuePage = () => {
     if (filter === 'confirmed') list = list.filter(item => item.reviewStatus === 'confirmed');
     if (filter === 'overridden') list = list.filter(item => item.reviewStatus === 'overridden');
     if (filter === 'pending') list = list.filter(item => item.reviewStatus === 'pending' || !item.reviewStatus);
+    if (filter === 'disagree') list = list.filter(item => item.branchAgreement === false);
+    if (filter === 'claimed') list = list.filter(item => !!item.claimedBy);
 
     // PHC filter
     if (phcFilter !== 'all') {
@@ -242,7 +248,7 @@ export const ReviewQueuePage = () => {
     }
 
     return list;
-  }, [queue, filter, phcFilter, gradeFilter, searchQuery]);
+  }, [queue, filter, phcFilter, gradeFilter, searchQuery, tierFilter]);
 
   const sortedQueue = useMemo(() => {
     let sortableItems = [...filteredQueue];
@@ -288,6 +294,11 @@ export const ReviewQueuePage = () => {
   const confirmedCount = queue.filter(q => q.reviewStatus === 'confirmed').length;
   const overriddenCount = queue.filter(q => q.reviewStatus === 'overridden').length;
   const pendingCount = queue.filter(q => q.reviewStatus === 'pending' || !q.reviewStatus).length;
+  // Live: the queue lists ONLY cases awaiting review (reviewed ones leave it,
+  // api-contracts.md), so "confirmed / overridden" counts and filters could
+  // never be anything but 0. Show what the live queue can actually say.
+  const disagreeCount = queue.filter(q => q.branchAgreement === false).length;
+  const claimedCount = queue.filter(q => q.claimedBy).length;
 
   const hasActiveFilters = searchQuery.trim() !== '' || phcFilter !== 'all' || gradeFilter !== 'all' || filter !== 'all' || tierFilter.length < 3;
 
@@ -297,7 +308,7 @@ export const ReviewQueuePage = () => {
     setGradeFilter('all');
     setFilter('all');
     setTierFilter(['A', 'B', 'C']);
-    setSortConfig({ key: null, direction: 'asc' });
+    setSortConfig({ key: 'priorityRank', direction: 'asc' });
   }, []);
 
   if (loading) {
@@ -367,10 +378,19 @@ export const ReviewQueuePage = () => {
           </div>
         </div>
         <div className="u-flex u-items-center u-gap-3">
-          <span className="badge badge--neutral">{queue.length} {t('central.queue.stats.total', 'TOTAL')}</span>
-          <span className="badge badge--pass">{confirmedCount} {t('central.queue.stats.confirmed', 'CONFIRMED')}</span>
-          <span className="badge badge--warning">{overriddenCount} {t('central.queue.stats.overridden', 'OVERRIDDEN')}</span>
-          {pendingCount > 0 && <span className="badge badge--fail">{pendingCount} {t('central.queue.stats.pending', 'PENDING')}</span>}
+          <span className="badge badge--neutral" data-testid="queue-total">{queue.length} {t('central.queue.stats.total', 'AWAITING REVIEW')}</span>
+          {USE_MOCK_DATA ? (
+            <>
+              <span className="badge badge--pass">{confirmedCount} {t('central.queue.stats.confirmed', 'CONFIRMED')}</span>
+              <span className="badge badge--warning">{overriddenCount} {t('central.queue.stats.overridden', 'OVERRIDDEN')}</span>
+              {pendingCount > 0 && <span className="badge badge--fail">{pendingCount} {t('central.queue.stats.pending', 'PENDING')}</span>}
+            </>
+          ) : (
+            <>
+              <span className="badge badge--fail" data-testid="queue-disagree">{disagreeCount} BRANCH DISAGREEMENT{disagreeCount === 1 ? '' : 'S'}</span>
+              <span className="badge badge--warning" data-testid="queue-claimed">{claimedCount} CLAIMED</span>
+            </>
+          )}
         </div>
       </div>
 
@@ -458,12 +478,16 @@ export const ReviewQueuePage = () => {
 
       {/* Filter Bar */}
       <div className="queue-filter-bar u-mb-4">
-        {[
+        {(USE_MOCK_DATA ? [
           { id: 'all', label: t('central.queue.filters.all', 'ALL CASES') },
           { id: 'confirmed', label: t('central.queue.filters.confirmed', 'CONFIRMED CASES') },
           { id: 'overridden', label: t('central.queue.filters.overridden', 'OVERRIDDEN CASES') },
           { id: 'pending', label: t('central.queue.filters.pending', 'PENDING CASES') },
-        ].map(f => (
+        ] : [
+          { id: 'all', label: t('central.queue.filters.all', 'ALL CASES') },
+          { id: 'disagree', label: 'BRANCH DISAGREEMENTS' },
+          { id: 'claimed', label: 'CLAIMED BY A REVIEWER' },
+        ]).map(f => (
           <button
             key={f.id}
             className={`queue-filter-btn ${filter === f.id ? 'queue-filter-btn--active' : ''}`}
@@ -489,6 +513,7 @@ export const ReviewQueuePage = () => {
               <SortHeader label={t('central.queue.table.colRuleEngine', 'RULE ENGINE')} sortKey="drGradeRuleEngine" currentSort={sortConfig} onRequestSort={requestSort} />
               <SortHeader label={t('central.queue.table.colAgreement', 'AGREEMENT')} sortKey="branchAgreement" currentSort={sortConfig} onRequestSort={requestSort} />
               <SortHeader label={t('central.queue.table.colConfidence', 'CONFIDENCE')} sortKey="confidenceScore" currentSort={sortConfig} onRequestSort={requestSort} />
+              <th>{t('central.queue.table.colClaimedBy', 'CLAIMED BY')}</th>
               {/* Triage urgency: an ordering HINT inside the tier, not a
                   clinical score. The header carries the caveat so it is
                   visible without hovering a single row. */}
@@ -574,6 +599,14 @@ export const ReviewQueuePage = () => {
                   )}
                 </td>
                 <td><ConfidenceBar value={item.confidenceScore} /></td>
+                {/* §10.8: who holds this case right now, shown BEFORE it is
+                    opened so a reviewer does not walk into a case they cannot
+                    act on. null = free. */}
+                <td className="t-mono" data-testid="claimed-by-cell">
+                  {item.claimedBy
+                    ? <span className="badge badge--warning" title={item.claimedAt ? `since ${new Date(item.claimedAt).toLocaleTimeString()}` : undefined}>● {item.claimedBy.name || 'ANOTHER REVIEWER'}</span>
+                    : <span style={{ opacity: 0.35 }}>—</span>}
+                </td>
                 {/* Urgency: ordering hint only. Rendered muted and with the
                     limitation on hover so it never reads as a clinical score,
                     and "--" for not-computed so a blank cell is not mistaken

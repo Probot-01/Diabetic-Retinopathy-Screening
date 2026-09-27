@@ -163,12 +163,14 @@ export const PhcHealthPage = () => {
     );
   }
 
-  const hasCriticalAlerts = systemHealth && (
-    systemHealth.silentPhcs?.length > 0 ||
-    systemHealth.stuckJobs?.length > 0 ||
-    systemHealth.matlabSessionStatus !== 'healthy' ||
-    systemHealth.unreviewedCases?.length > 0
-  );
+  // The four checks of design §5.3 / §10.7, each true when tripped.
+  const trippedChecks = systemHealth ? [
+    systemHealth.silentPhcs?.length > 0,
+    systemHealth.stuckJobs?.length > 0,
+    systemHealth.matlabSessionStatus !== 'healthy',
+    systemHealth.unreviewedCases?.length > 0,
+  ].filter(Boolean).length : 0;
+  const hasCriticalAlerts = trippedChecks > 0 || (systemHealth?.alerts?.length ?? 0) > 0;
 
   return (
     <div className="section">
@@ -191,7 +193,7 @@ export const PhcHealthPage = () => {
                 CRITICAL SYSTEM HEALTH EXCEPTION
               </span>
               <span className="t-mono" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-crimson)' }}>
-                {systemHealth.alerts?.length ?? 0} ACTIVE SYSTEM ALERTS TRIGGERED
+                {trippedChecks} OF 4 CHECKS TRIPPED · {systemHealth.alerts?.length ?? 0} OPEN ALERT{(systemHealth.alerts?.length ?? 0) === 1 ? '' : 'S'}
               </span>
             </div>
             <span className="t-mono" style={{ fontSize: '10px', color: 'var(--c-text-muted)' }}>
@@ -212,7 +214,8 @@ export const PhcHealthPage = () => {
                 }}
               >
                 <div style={{ fontWeight: 700, color: 'var(--c-crimson)', marginBottom: '4px' }}>
-                  ⚠ {alert.subject}
+                  ⚠ {String(alert.kind || 'alert').replace(/_/g, ' ').toUpperCase()}{alert.subject ? ` — ${alert.subject}` : ''}
+                  {alert.occurrences > 1 ? ` (×${alert.occurrences})` : ''}
                 </div>
                 <div style={{ color: 'var(--c-text)', opacity: 0.9 }}>
                   {alert.message}
