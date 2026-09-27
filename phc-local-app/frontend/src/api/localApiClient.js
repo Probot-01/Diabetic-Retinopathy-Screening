@@ -107,6 +107,50 @@ class LocalApiClient {
     return data;
   }
 
+  /**
+   * searchPatients({ name, age, phone }) -> GET /patients/search
+   *
+   * The duplicate check (design doc SS10.3, backend plan SSB.1). The endpoint
+   * has existed on both this backend and the central one since B.1 and NO UI
+   * called it, so the same person registered twice became two patient records
+   * with two separate screening histories and nothing pointing between them.
+   *
+   * Returns candidates already ranked by the server, each with `matchedOn`
+   * saying WHICH field matched -- name, phone or age. That distinction is the
+   * point: two people can share a name, but a matching phone number is much
+   * stronger evidence of the same person, and the worker deciding needs to
+   * see which it was rather than a bare similarity score.
+   *
+   * Needs a name or a phone; the server rejects a search on age alone, which
+   * would return most of the register. Returns [] rather than throwing when
+   * there is nothing to search on, so a caller can call it on every keystroke
+   * without guarding.
+   */
+  async searchPatients({ name, age, phone } = {}) {
+    const hasName = typeof name === 'string' && name.trim().length >= 3;
+    const hasPhone = typeof phone === 'string' && phone.replace(/\D/g, '').length >= 4;
+    if (!hasName && !hasPhone) return [];
+
+    if (this.useMock) {
+      await delay(200);
+      const n = (name || '').trim().toLowerCase();
+      return mockData.mockPatients
+        .filter((p) => n && String(p.name || '').toLowerCase().includes(n))
+        .map((p) => ({ ...p, matchedOn: ['name'], score: 2 }));
+    }
+
+    const q = new URLSearchParams();
+    if (hasName) q.set('name', name.trim());
+    if (hasPhone) q.set('phone', phone);
+    if (age !== undefined && age !== null && age !== '') q.set('age', String(age));
+
+    const data = await this._request(`/patients/search?${q.toString()}`);
+    if (!Array.isArray(data)) {
+      throw new ApiError('bad_response', 'The patient search response was not a list.');
+    }
+    return data;
+  }
+
   /** registerPatient(patientData) -> POST /patients. Live: rejects on any failure. */
   async registerPatient(patientData) {
     if (this.useMock) {

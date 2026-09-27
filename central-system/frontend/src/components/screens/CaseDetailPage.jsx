@@ -218,6 +218,41 @@ export const CaseDetailPage = () => {
             <span className="badge badge--fail" data-testid="claimed-by-other">● CLAIMED BY {String(claimedBy).toUpperCase()}</span>
           )}
           <SeverityBadge grade={c.drGradeCnn} />
+
+          {/* WHY this case is in its tier, not just which tier.
+              Five different situations produce a "B" -- the model being
+              unsure, an unreliable fovea, an eye-laterality mismatch, a
+              camera on probation, or a camera nobody has validated -- and
+              they ask different things of the reviewer. The backend has
+              recorded the reason since migration 0015; showing only the
+              letter threw that away at the last step. */}
+          {c.conformalTier && (
+            <span
+              className="badge badge--neutral"
+              title={c.tierReason
+                || 'Reason not recorded: this case was graded before the reason was stored.'}
+              data-testid="tier-badge"
+            >
+              TIER {String(c.conformalTier).toUpperCase()}
+            </span>
+          )}
+
+          {/* The fovea gate. When it fires, the quadrant-based severe-NPDR
+              criteria (a) and (b) were SKIPPED for this eye, so the grade may
+              be an under-call. That is said inside the evidence prose; a
+              reviewer scanning the header should not have to read for it. */}
+          {c.foveaUnreliable === true && (
+            <span
+              className="badge badge--fail"
+              title={'The fovea could not be located reliably, so lesion quadrants '
+                + 'cannot be trusted. The quadrant-based severe-NPDR criteria were '
+                + 'not applied and this grade may be an under-call.'}
+              data-testid="fovea-unreliable-badge"
+            >
+              ⚠ FOVEA UNRELIABLE
+            </span>
+          )}
+
           {isBranchMismatch && (
             <span className="badge badge--fail case-detail__mismatch-badge">
               {t('central.caseDetail.mismatchWarning', '⚠ BRANCH MISMATCH — REVIEW REQUIRED')}
