@@ -148,6 +148,13 @@ addColumnIfMissing('sync_queue', 'central_case_id', 'TEXT');
 addColumnIfMissing('sync_queue', 'central_status', 'TEXT');
 addColumnIfMissing('sync_queue', 'owner_device', 'TEXT');
 addColumnIfMissing('sync_queue', 'updated_at', 'TEXT');
+// 2026-09-26: why a capture is still pending, so a rejection is visible instead of
+// an endless silent retry. error_kind is 'network' | 'rejected' (central answered 4xx)
+// | 'server' (5xx / unusable answer); next_attempt_at backs off rejected/server rows.
+addColumnIfMissing('sync_queue', 'last_error', 'TEXT');
+addColumnIfMissing('sync_queue', 'error_kind', 'TEXT');
+addColumnIfMissing('sync_queue', 'attempts', 'INTEGER NOT NULL DEFAULT 0');
+addColumnIfMissing('sync_queue', 'next_attempt_at', 'TEXT');
 
 const SYNCED_TABLES = {
   patients: 'patient_id',

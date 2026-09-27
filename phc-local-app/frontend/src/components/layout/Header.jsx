@@ -114,6 +114,18 @@ export const Header = ({ auth, onLogout }) => {
               <span style={{ opacity: 0.5, marginLeft: '4px' }}>
                 ● {syncStatus.pendingCount} {t('header.status.pending')}
               </span>
+              {syncStatus.awaitingFormsCount > 0 && (
+                <span style={{ marginLeft: '6px', color: 'var(--c-warning)' }}
+                  title="Passed the quality check but will not upload until both questionnaires are recorded.">
+                  ● {syncStatus.awaitingFormsCount} AWAITING QUESTIONNAIRE
+                </span>
+              )}
+              {syncStatus.lastError && (
+                <span style={{ marginLeft: '6px', color: 'var(--c-crimson)', fontWeight: 700 }}
+                  title={syncStatus.lastError.message} data-testid="sync-last-error">
+                  ⚠ {syncStatus.lastError.kind === 'network' ? 'UPLOAD INTERRUPTED' : 'CENTRAL REFUSED AN UPLOAD'}
+                </span>
+              )}
             </div>
           )}
         </div>

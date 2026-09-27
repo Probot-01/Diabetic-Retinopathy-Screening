@@ -29,7 +29,10 @@
 const fs   = require('fs');
 const path = require('path');
 
-const MEDIA_ROOT = path.resolve(__dirname, '..', 'media');
+// MEDIA_ROOT overrides the default so tests can write to a scratch directory.
+const MEDIA_ROOT = process.env.MEDIA_ROOT
+  ? path.resolve(process.env.MEDIA_ROOT)
+  : path.resolve(__dirname, '..', 'media');
 const CASES_ROOT = path.join(MEDIA_ROOT, 'cases');
 
 /** Absolute directory holding one case's media. Created if absent. */

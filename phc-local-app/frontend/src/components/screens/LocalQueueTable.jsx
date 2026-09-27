@@ -6,43 +6,85 @@ import { USE_MOCK_DATA } from '../../config';
 import { LoadError } from '../shared/LoadError';
 import { DiagnosticResultModal } from './DiagnosticResultModal';
 
-const PIPELINE_CONFIG = {
-  captured: {
-    stage: 1,
-    label: 'CAPTURED',
-    badgeClass: 'stage-badge--captured',
-    actionText: 'WAITING (QA)',
-    actionDisabled: true,
-  },
-  quality_passed: {
-    stage: 2,
-    label: 'QUALITY PASS',
-    badgeClass: 'stage-badge--pass',
-    actionText: 'WAITING (SYNC)',
-    actionDisabled: true,
-  },
-  result_pending: {
-    stage: 3,
-    label: 'AI PENDING',
-    badgeClass: 'stage-badge--pending',
-    actionText: 'AI PROCESSING...',
-    actionDisabled: true,
-  },
-  synced: {
-    stage: 4,
-    label: 'SYNCED, AWAITING AI',
-    badgeClass: 'stage-badge--synced',
-    actionText: 'WAITING FOR AI',
-    actionDisabled: true,
-  },
-  result_delivered: {
-    stage: 5,
-    label: 'RESULT READY',
-    badgeClass: 'stage-badge--ready',
-    actionText: 'VIEW RESULT →',
-    actionDisabled: false,
-  },
+// The five stages of design doc §4.1, in order. A capture is at exactly one.
+//   1 Captured  2 Quality-passed  3 Synced  4 Result-pending  5 Result-delivered
+// "Synced" means central ACCEPTED the case; "result pending/delivered" come from
+// what central reports about it (never from elapsed time).
+const STAGE = { captured: 1, quality_passed: 2, synced: 3, result_pending: 4, result_delivered: 5 };
+
+const REASON_TEXT = {
+  blur: 'blurred', low_illumination: 'too dark', insufficient_fov: 'field of view too small',
+  glare: 'glare', motion_artifact: 'motion artefact', eyelash_occlusion: 'eyelash occlusion',
 };
+
+/**
+ * describe(item) -> what the row says, and why.
+ *
+ * Problems are named, not hidden behind a stage label: a retake, a capture
+ * still waiting for its questionnaire, an upload central refused (with central's
+ * own words), a case central failed to grade. Mock items carry none of the
+ * extra fields, so they fall through to the plain stage labels.
+ */
+function describe(item) {
+  const status = STAGE[item.status] ? item.status : 'captured';
+  const base = { stage: STAGE[status], detail: null, isError: false, badgeClass: 'stage-badge--pending', actionText: 'WAITING', actionDisabled: true, label: '' };
+
+  if (status === 'captured') {
+    if (item.qualityStatus === 'retake') {
+      return { ...base, label: 'RETAKE REQUIRED', badgeClass: 'stage-badge--error', isError: true,
+        detail: `The image failed the quality check${item.qualityReason ? ` (${REASON_TEXT[item.qualityReason] || item.qualityReason})` : ''}. It is not uploaded.`,
+        actionText: 'RETAKE' };
+    }
+    if (item.qualityStatus === null) {
+      return { ...base, label: 'QUALITY CHECK NOT RUN', badgeClass: 'stage-badge--blocked', isError: true,
+        detail: 'The image is saved, but the quality gate could not run (MATLAB unavailable?). Re-check it from the capture screen once it is.',
+        actionText: 'WAITING (QA)' };
+    }
+    return { ...base, label: 'CAPTURED', badgeClass: 'stage-badge--captured', actionText: 'WAITING (QA)' };
+  }
+
+  if (status === 'quality_passed') {
+    if (item.syncError) {
+      const e = item.syncError;
+      const refused = e.kind === 'rejected' || e.kind === 'server';
+      return { ...base, label: refused ? 'UPLOAD FAILED — CENTRAL DID NOT ACCEPT IT' : 'UPLOAD INTERRUPTED',
+        badgeClass: 'stage-badge--error', isError: true, detail: e.message,
+        actionText: e.nextAttemptAt ? 'WILL RETRY' : 'RETRYING' };
+    }
+    if (item.formsComplete === false) {
+      return { ...base, label: 'QUESTIONNAIRE MISSING', badgeClass: 'stage-badge--blocked', isError: true,
+        detail: 'Passed the quality check, but it will not upload until both questionnaires are recorded.',
+        actionText: 'WAITING (FORMS)' };
+    }
+    if (item.uploadProgress) {
+      return { ...base, label: `UPLOADING ${item.uploadProgress.sent}/${item.uploadProgress.total}`, actionText: 'UPLOADING…' };
+    }
+    return { ...base, label: item.formsComplete === true ? 'QUEUED — PENDING UPLOAD' : 'QUALITY PASS',
+      badgeClass: 'stage-badge--pass', actionText: 'WAITING (SYNC)' };
+  }
+
+  if (status === 'synced') {
+    if (item.centralStatus === 'error') {
+      return { ...base, label: 'SYNCED — GRADING FAILED AT CENTRAL', badgeClass: 'stage-badge--error', isError: true,
+        detail: 'Central accepted the case but could not grade it, so there is no result. It needs attention at central.',
+        actionText: 'NO RESULT' };
+    }
+    return { ...base, label: 'SYNCED, AWAITING AI', badgeClass: 'stage-badge--synced', actionText: 'WAITING FOR AI' };
+  }
+
+  if (status === 'result_pending') {
+    return { ...base, label: 'AI PENDING', badgeClass: 'stage-badge--pending', actionText: 'AI PROCESSING...' };
+  }
+
+  // result_delivered: central reports the case graded. Live rows carry no grade
+  // (the Local API never holds one), so there is nothing to open: say where the
+  // result is instead of showing a button that does nothing.
+  if (!USE_MOCK_DATA && !item.prediction) {
+    return { ...base, label: 'RESULT READY', badgeClass: 'stage-badge--ready', actionText: 'RESULT AT CENTRAL',
+      detail: 'Central has graded this case. This station does not display the grade yet.' };
+  }
+  return { ...base, label: 'RESULT READY', badgeClass: 'stage-badge--ready', actionText: 'VIEW RESULT →', actionDisabled: false };
+}
 
 export const LocalQueueTable = () => {
   const { t } = useTranslation();
@@ -94,8 +136,8 @@ export const LocalQueueTable = () => {
     setIsModalOpen(true);
   };
 
-  const renderStageIndicator = (status) => {
-    const config = PIPELINE_CONFIG[status] || PIPELINE_CONFIG.captured;
+  const renderStageIndicator = (item) => {
+    const config = describe(item);
     const stageNum = config.stage;
 
     return (
@@ -107,7 +149,7 @@ export const LocalQueueTable = () => {
               dotType = 'completed'; // Solid green
             } else if (dot === stageNum) {
               // Current stage: green if delivered/pass, amber if awaiting sync/AI
-              dotType = (stageNum === 5 || stageNum === 1 || stageNum === 2) ? 'completed' : 'active';
+              dotType = (stageNum === 5 || stageNum === 1 || stageNum === 2) && !config.isError ? 'completed' : 'active';
             }
             return (
               <span
@@ -121,6 +163,9 @@ export const LocalQueueTable = () => {
         <div className={`stage-label ${config.badgeClass}`}>
           {config.label}
         </div>
+        {config.detail && (
+          <div className={`stage-detail${config.isError ? ' stage-detail--error' : ''}`}>{config.detail}</div>
+        )}
       </div>
     );
   };
@@ -174,7 +219,7 @@ export const LocalQueueTable = () => {
               </tr>
             ) : (
               queue.map((item) => {
-                const config = PIPELINE_CONFIG[item.status] || PIPELINE_CONFIG.captured;
+                const config = describe(item);
                 // Live rows carry no prediction (the PHC never holds a grade), so
                 // there is nothing real to open; the modal must never fall back
                 // to a fixture result for them.
@@ -201,7 +246,7 @@ export const LocalQueueTable = () => {
                       </span>
                     </td>
                     <td>
-                      {renderStageIndicator(item.status)}
+                      {renderStageIndicator(item)}
                     </td>
                     <td>
                       {config.actionDisabled || !isReady ? (
@@ -209,7 +254,7 @@ export const LocalQueueTable = () => {
                           type="button"
                           disabled
                           className="btn-action-col btn-action-col--disabled"
-                          title={`Pipeline stage: ${config.label}`}
+                          title={config.detail || `Pipeline stage: ${config.label}`}
                         >
                           {config.actionText}
                         </button>

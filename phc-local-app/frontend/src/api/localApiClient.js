@@ -18,11 +18,14 @@ const CAPTURE_TIMEOUT_MS = 60000;
  * client-side code (network_error, timeout, config_missing, bad_response).
  */
 export class ApiError extends Error {
-  constructor(code, message, status = null) {
+  constructor(code, message, status = null, details = null) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
+    // The rest of the error body the backend sent (e.g. captureId on a 503
+    // quality_gate_failed, which is what a re-check of the saved image needs).
+    this.details = details;
   }
 }
 
@@ -80,7 +83,7 @@ class LocalApiClient {
     const body = await res.json().catch(() => null);
     if (!res.ok) {
       throw new ApiError(body?.error || `http_${res.status}`,
-        body?.message || `${res.status} ${res.statusText} from ${path}`, res.status);
+        body?.message || `${res.status} ${res.statusText} from ${path}`, res.status, body);
     }
     return body;
   }
@@ -178,6 +181,21 @@ class LocalApiClient {
    * equivalent: in live mode the queue comes from GET /captures and this does
    * nothing.
    */
+  /**
+   * recheckQuality(captureId) -> POST /captures/:captureId/quality-check.
+   * Re-runs the gate on an image that was SAVED but not checked (after a 503
+   * quality_gate_failed), without asking for the photograph again. Same body as
+   * POST /captures. Live only: mock mode has no gate to re-run.
+   */
+  async recheckQuality(captureId) {
+    if (this.useMock) return null;
+    const data = await this._request(`/captures/${encodeURIComponent(captureId)}/quality-check`, { method: 'POST' }, CAPTURE_TIMEOUT_MS);
+    if (!data || typeof data.captureId !== 'string' || typeof data.qualityStatus !== 'string') {
+      throw new ApiError('bad_response', 'The quality-check response did not have the expected shape.');
+    }
+    return data;
+  }
+
   async saveCaptureMetadata(captureId, metadata) {
     if (!this.useMock) return null;
     await delay(400);

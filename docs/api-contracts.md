@@ -4,7 +4,7 @@
 
 **Global naming rule:** SQL columns are `snake_case` (matches the schema.sql files). Every JSON payload over HTTP — every request body, every response body — is `camelCase`. The translation between the two happens in the route handler, never in the database layer and never in a frontend component. If you're generating a route handler, it reads snake_case from the DB and returns camelCase JSON; if you're generating a DB insert, it takes camelCase from the parsed request and writes snake_case columns.
 
-**Global ID rule:** all IDs are strings, never numbers, even where the DB uses an integer or UUID underneath. Locally-generated IDs (patients, captures) use the format `{PHC_CODE}-{base36 timestamp}-{4 random alphanumeric chars}`, e.g. `"PHC001-lz3k9f-a2x9"`. Centrally-generated IDs (cases, reviews, referrals) are standard UUIDv4 strings.
+**Global ID rule:** all IDs are strings, never numbers, even where the DB uses an integer or UUID underneath. Locally-generated IDs (patients, captures) use the format `{PHC_CODE}-{base36 timestamp}-{8 random alphanumeric chars}`, e.g. `"PHC001-mtuss3yg-a2x9k7qp"` (since 2026-09-24; IDs minted earlier keep their 4-character suffix and stay valid; the full rule is `docs/id-format-spec.md`). Centrally-generated IDs (cases, reviews, referrals) are standard UUIDv4 strings.
 
 **Global date rule:** every timestamp field is an ISO 8601 string in UTC, e.g. `"2026-09-06T14:32:00.000Z"`. Never epoch numbers, never locale-formatted strings.
 
@@ -34,6 +34,17 @@ plans have to be re-checked against it, and a silent edit makes that impossible.
 - **`POST /api/v1/cases`, `/cases/summary` and the chunk upload accept an optional `qualityGateEngine`**: a JSON-stringified engine entry for the PHC's quality gate. A malformed value returns `400 invalid_field`. If it is absent, it is stored as "not recorded". The PHC desktop backend sends it from this date. The Expo mobile app does not send it yet.
 - **`GET /health` gains `components`**: `db`, `queue`, `matlabSession` and `python`, reported separately. The top-level `status` is still `"ok"` whenever the server answers, because PHC sync and the mobile app treat `/health` as a reachability heartbeat. Monitors should read `components`.
 - **New `failureCode` value `matlab_segmentation_failed`**: segmentation's MATLAB engine failed and `SEG_ALLOW_PYTHON_FALLBACK` is not set. The case is retried, then marked `error`. It is no longer silently re-run on PyTorch, and no longer silently graded on the classifier alone.
+
+**2026-09-26 — PHC capture → sync → result flow (Local API).** Found by running the whole flow against real services; each change is additive unless marked.
+
+- **Fixed (behaviour): a capture is uploaded only after both questionnaires are recorded.** It used to be queued at the quality gate and uploaded within one sync cycle, so central graded cases with `questionnaireData` and `captureMetadata` NULL. `pendingCount` now counts only rows ready to upload; new `awaitingFormsCount` counts the rest.
+- **Fixed (behaviour): "synced" now means central accepted the case** (201, or 200 + `duplicate: true`, with a `caseId`). Any other 2xx used to mark the capture synced.
+- **`GET /sync/status` gains `awaitingFormsCount` and `lastError`**; a refusal is recorded and retried with backoff instead of retried silently and forever.
+- **`GET /captures`: `result_pending` and `result_delivered` are now reachable**, driven by polling central's status endpoint. New per-row fields: `qualityStatus`, `qualityReason`, `formsComplete`, `centralStatus`, `syncError`, `uploadProgress`.
+- **`POST /captures` response gains `qualityGateEngine`** (which engine ran the gate). The `503 quality_gate_failed` body gains `captureId`.
+- **New `POST /captures/:captureId/quality-check`**: re-run the gate on a saved, unchecked capture (what the 503 text always promised).
+- **The disabled JS quality-gate tier no longer invents a verdict.** It answered `retake` / `MATLAB_UNAVAILABLE` for every image; it now throws, which is reported as `503 quality_gate_failed`.
+- **Global ID rule corrected to the 8-character suffix** (`docs/id-format-spec.md`, 2026-09-24); the contract text still said 4.
 
 **2026-09-24 — PHC-readable report.** Added `GET /api/v1/phc/cases/:captureRef/report` and `GET /api/v1/phc/cases/:captureRef/gradcam` (PHC key). Until now nothing a PHC is allowed to call returned a grade, so a PHC front-end had no honest way to show a result. First consumer: the Expo mobile app.
 
@@ -146,22 +157,28 @@ Request: `multipart/form-data` with fields `patientId` (string), `image` (file),
 Response `201`:
 ```json
 {
-  "captureId": "PHC001-lz4a2b-c7f1",
-  "patientId": "PHC001-lz3k9f-a2x9",
+  "captureId": "PHC001-mtuss3yg-a2x9k7qp",
+  "patientId": "PHC001-mtuss2ab-k4z8m1cd",
   "qualityStatus": "pass",
   "qualityReason": null,
   "retakeCount": 0,
-  "capturedAt": "2026-09-06T09:05:00.000Z"
+  "capturedAt": "2026-09-06T09:05:00.000Z",
+  "qualityGateEngine": { "engine": "matlab", "fallback": false, "detail": "qualityGateMain.m via matlab -batch" }
 }
 ```
 `qualityStatus` is exactly one of `"pass" | "retake" | "borderline"`.
+
+*(2026-09-26)* **`qualityGateEngine`** says which engine produced this verdict: `{ "engine": "matlab" | "js-fallback", "fallback": boolean, "detail": string }`. It is never guessed: it is `null` only for a capture gated before the engine was recorded. The screen must show it. `"matlab"` covers both the compiled executable and `matlab -batch` (`detail` says which). `"js-fallback"` can only appear with `QUALITY_GATE_ALLOW_FALLBACK=1`, and the JS tier is currently switched off in code, so it does not answer today (see the 503 below).
 `qualityReason` is `null` when `qualityStatus` is `"pass"`; otherwise exactly one of: `"blur" | "low_illumination" | "insufficient_fov" | "glare" | "motion_artifact" | "eyelash_occlusion"`. These six strings are fixed — the frontend's `QualityResultPanel.jsx` maps each one to its own human-readable message, so the quality gate must return one of these exact values, never free text.
 
 `retakeCount` counts prior failed attempts **for this patient on the current UTC day**. It answers "which attempt is this, in this sitting" — a patient screened again months later starts at 0 rather than inheriting an old count.
 
 Errors: `400 patient_id_required`, `400 image_required`, `400 invalid_image_type`, `404 patient_not_found`, `413 image_too_large` (25 MB), `503 quality_gate_failed`.
 
-`503 quality_gate_failed` means the image **was saved** and the capture row exists, but the quality check could not run (typically MATLAB unavailable). The capture is recoverable and can be re-checked without recalling the patient — do not present it to the technician as a lost capture. The row stays in an internal `pending` state that is never returned as a `qualityStatus`.
+`503 quality_gate_failed` means the image **was saved** and the capture row exists, but the quality check could not run (typically MATLAB unavailable). The capture is recoverable and can be re-checked without recalling the patient — do not present it to the technician as a lost capture. The row stays in an internal `pending` state that is never returned as a `qualityStatus`. *(2026-09-26)* The error body also carries **`captureId`**, the id to re-check it with (below). No verdict is ever invented when the gate cannot run: the JS tier used to answer every image with `retake` / `MATLAB_UNAVAILABLE`, which is not one of the six reasons and told technicians to retake photographs that had never been checked.
+
+### `POST /captures/:captureId/quality-check`  *(added 2026-09-26)*
+Re-run the quality gate on a capture that was saved but not checked (the `503 quality_gate_failed` case), without taking the photograph again. No request body. Response `200`: the same body as `POST /captures`. A capture that already has a verdict is returned as it is, not re-gated. Errors: `404 capture_not_found`, `409 quality_gate_busy` (already being checked), `503 quality_gate_failed` (still unavailable; same `captureId`).
 
 ### `POST /captures/:captureId/questionnaire` (patient symptom + risk)
 Request:
@@ -202,11 +219,15 @@ Request:
 Response `201`: `{ "responseId": "string", "captureId": "string" }`
 
 ### `GET /sync/status`
-Response `200`: `{ "online": true, "pendingCount": 3, "lastSyncAttempt": "2026-09-06T09:10:00.000Z" }` — `lastSyncAttempt` is `null` if no attempt has ever been made.
+Response `200`: `{ "online": true, "pendingCount": 3, "awaitingFormsCount": 1, "lastSyncAttempt": "2026-09-06T09:10:00.000Z", "lastError": null }` — `lastSyncAttempt` is `null` if no attempt has ever been made.
 
 `online` reflects the last actual heartbeat to the central server, held in memory rather than persisted: "is the network up right now" is true of the running process at this moment, and a restarted server must not report a state it has never observed. **Until the sync manager (Task 3.4) exists, this is always `false` with `lastSyncAttempt: null`** — nothing has tried to reach the server yet, so that is the honest answer rather than a placeholder. The technician uses this indicator to decide whether the patient can wait for a result, so an optimistic `true` that nothing verified is worse than `false`.
 
-`pendingCount` counts `sync_queue` rows awaiting upload. Only captures whose quality status is `pass` or `borderline` are queued: a `retake` is about to be reshot, and uploading it would spend scarce rural bandwidth on an image that is already being replaced.
+`pendingCount` counts `sync_queue` rows **ready to upload and not yet accepted by central**. Only captures whose quality status is `pass` or `borderline` are queued: a `retake` is about to be reshot, and uploading it would spend scarce rural bandwidth on an image that is already being replaced.
+
+*(2026-09-26)* **A capture is uploaded only once BOTH questionnaires are recorded** (`POST /captures/:captureId/questionnaire` and `.../capture-metadata`). Before this it was queued at the quality gate and the sync loop usually won the race against the technician: central stored and graded the case with no questionnaires, and the answers recorded a minute later were never sent. `awaitingFormsCount` counts the passed captures still waiting for a questionnaire; they are not in `pendingCount`. **`lastError`** is `null`, or `{ "captureId", "kind": "network" | "rejected" | "server", "message", "at" }`: the most recent reason a capture is still pending, in central's own words when it answered (`rejected` = central refused it with a 4xx; `server` = a 5xx, or a 2xx that was not an acceptance; `network` = no answer). A refusal is retried with a doubling delay (30 s up to 15 min) rather than resending the image every cycle; a dropped connection is retried at once.
+
+**"Synced" means central ACCEPTED the case** (design doc §4.1, §4.4): `201` from `POST /api/v1/cases` (or from `chunks/complete`), or `200` with `"duplicate": true` (central already had the capture), and in both cases a `caseId`. Any other answer, however 2xx, leaves the capture pending.
 
 ### `GET /captures` (for the Local Queue table)
 Response `200`: array of
@@ -216,14 +237,22 @@ Response `200`: array of
   "patientId": "PHC001-lz3k9f-a2x9",
   "patientName": "Sunita Devi",
   "status": "quality_passed",
-  "capturedAt": "2026-09-06T09:05:00.000Z"
+  "capturedAt": "2026-09-06T09:05:00.000Z",
+  "qualityStatus": "borderline",
+  "qualityReason": null,
+  "formsComplete": true,
+  "centralStatus": null,
+  "syncError": null,
+  "uploadProgress": null
 }
 ```
 `status` ∈ `"captured" | "quality_passed" | "synced" | "result_pending" | "result_delivered"`.
 
+*(2026-09-26)* The fields after `capturedAt` are additive detail behind `status`. `qualityStatus` is the capture's quality verdict (`null` while the gate has not run), `qualityReason` its reason. `formsComplete` is whether both questionnaires are recorded. `centralStatus` is what central last reported about the case (`"awaiting_image" | "processing" | "graded" | "error"`) or `null`. `syncError` is `null` or `{ "kind", "message", "attempts", "nextAttemptAt" }` (same kinds as `/sync/status`). `uploadProgress` is `null` or `{ "sent", "total" }` for a chunked upload in flight or interrupted.
+
 This is a **lifecycle** vocabulary and is not the same thing as `qualityStatus`: `qualityStatus` answers "was the photo usable", `status` answers "how far along is this case". Do not map one onto the other.
 
-Only the first three are currently reachable. `result_pending` and `result_delivered` require knowing what the central server did with a case, and nothing local tracks that yet — the sync manager only records that the upload succeeded. A case awaiting a result therefore reports `synced`. Do **not** infer the later two from elapsed time; a fabricated status on a clinical screen is worse than a coarse one.
+*(2026-09-26)* All five are now reachable, and the last three come from **what central reports**, never from elapsed time: after central accepts a case the sync manager polls `GET /api/v1/cases/:caseId/status` until it is `graded` or `error`. `synced` = accepted, no report on it yet; `result_pending` = central reports `awaiting_image` or `processing`; `result_delivered` = central reports `graded` (the grade itself is held at central; this Local API does not carry it). A case central reports as `error` stays **`synced`** with `centralStatus: "error"`: it was accepted but has no result, and must never be shown as one. Do **not** infer any of these from elapsed time; a fabricated status on a clinical screen is worse than a coarse one.
 
 ---
 
