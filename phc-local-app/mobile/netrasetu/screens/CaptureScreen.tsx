@@ -26,12 +26,13 @@ import { CaptureMetadataForm, LENS_DEVICE, MetadataDraft, metadataMissing, toMet
 import { Btn, Card, Notice } from '../components/ui';
 import { useToast } from '../components/Toast';
 import { RootStackParamList } from '../navigation/types';
+import { DEMO_TOOLS } from '../config';
 import { CaptureSource, Patient, QualityResult } from '../types';
 import { getPatient } from '../db/patients';
 import { countRetakesToday, discardUnqueuedCapture, newCaptureId, queueCapture, recordCapture } from '../db/captures';
 import { persistCaptureImage } from '../lib/storage';
 import { runQualityGate } from '../lib/quality/runQualityGate';
-import { EMPTY_QUESTIONNAIRE, priorityTier, toQuestionnairePayload } from '../lib/questionnaire';
+import { priorityTier, questionnaireMissing, toQuestionnairePayload } from '../lib/questionnaire';
 import { syncManager } from '../sync/syncManager';
 import { useSync } from '../sync/useSync';
 
@@ -156,9 +157,15 @@ export default function CaptureScreen() {
     setShowMetaErrors(true);
     const missing = metadataMissing(meta);
     if (missing.length) { toast(`Answer every capture question: ${missing.join(', ')}.`); return; }
+    // Both questionnaires are mandatory (§9.1): a patient record with no (or an incomplete) questionnaire
+    // must go back to registration, never be filled in with default answers.
+    if (!patient.questionnaire || questionnaireMissing(patient.questionnaire).length) {
+      toast('This patient has no completed symptom & risk questionnaire. Register the visit again to answer it.');
+      return;
+    }
     setSaving(true);
     try {
-      const questionnaire = toQuestionnairePayload(patient.questionnaire ?? EMPTY_QUESTIONNAIRE, i18n.language.split('-')[0]);
+      const questionnaire = toQuestionnairePayload(patient.questionnaire, i18n.language.split('-')[0]);
       const metadata = toMetadataPayload(meta);
       await queueCapture({
         captureId, eye: meta.eye!, cameraDeviceId: meta.cameraDeviceId, bestEffort,
@@ -227,7 +234,7 @@ export default function CaptureScreen() {
               <>
                 <Btn size="lg" icon="🖼" label="IMPORT FROM GALLERY" onPress={importFromGallery} accessibilityHint="Image taken on the dedicated fundus camera" />
                 <Btn size="lg" variant="outline" icon="◉" label="CAPTURE WITH FUNDUS LENS" onPress={() => navigation.navigate('LensCamera', { patientId })} />
-                <Btn size="sm" variant="ghost" label={t('capture.loadSample', '✦ LOAD SAMPLE RETINAL SCAN')} onPress={loadSample} />
+                {DEMO_TOOLS ? <Btn size="sm" variant="ghost" label={t('capture.loadSample', '✦ LOAD SAMPLE RETINAL SCAN')} onPress={loadSample} /> : null}
               </>
             ) : (
               <View style={s.actions}>

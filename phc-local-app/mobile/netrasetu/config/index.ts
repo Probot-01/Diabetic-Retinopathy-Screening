@@ -54,6 +54,13 @@ export function subscribeConfig(listener: (c: AppConfig) => void): () => void {
   return () => listeners.delete(listener);
 }
 
+/**
+ * The bundled sample scan is not a patient's photograph; a real case built from
+ * it would be a fabricated capture (CLAUDE.md, design §1.22). It is offered only
+ * when this build is explicitly a demo (EXPO_PUBLIC_DEMO_TOOLS=1).
+ */
+export const DEMO_TOOLS = process.env.EXPO_PUBLIC_DEMO_TOOLS === '1';
+
 /** Tunables that are policy, not deployment. */
 export const POLICY = {
   /** Requests to central give up after this long (upload of a large image may take a while). */
