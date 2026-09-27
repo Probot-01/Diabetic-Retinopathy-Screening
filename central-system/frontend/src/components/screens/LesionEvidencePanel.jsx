@@ -1,42 +1,94 @@
 import React from 'react';
-import { drGradeLabels } from '../../api/mockData';
+
+/**
+ * Lesion evidence: what the segmentation models actually produce, and nothing
+ * padded around it.
+ *
+ * The pipeline has TWO lesion detectors, so this shows two families:
+ *   RED lesions    (M5)  -- one total, with the microaneurysm / haemorrhage
+ *                           split shown ONLY when the red-lesion model reports
+ *                           it (M5 v2 does; v1 does not -- then just the total).
+ *   BRIGHT lesions (M4)  -- hard exudates.
+ * There is no cotton-wool-spot (soft exudate) detector, so there is no box for
+ * it: a permanently empty "N/A" tile reads as a finding that was looked for and
+ * not measured. `lesionCounts.softExudates` stays in the API for wire
+ * compatibility and is always null (api-contracts.md, 2026-09-26).
+ *
+ * `lesionCounts: null` means segmentation did not run -- said so, never shown
+ * as zeros.
+ */
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const QUADS = ['SUP-TEMP', 'INF-TEMP', 'SUP-NASAL', 'INF-NASAL'];
+
+const Quadrants = ({ counts }) => (
+  Array.isArray(counts) && counts.length === 4 ? (
+    <div className="t-mono" style={{ fontSize: 'var(--fs-tiny)', opacity: 0.6, marginTop: 4 }}>
+      {counts.map((n, i) => `${QUADS[i]} ${n}`).join(' · ')}
+    </div>
+  ) : null
+);
+
+const Family = ({ label, color, total, children, footnote }) => (
+  <div className="lesion-item" style={{ display: 'block', padding: 'var(--sp-4)', border: 'var(--border)' }}>
+    <div className="u-flex u-justify-between u-items-center">
+      <span className="t-label" style={{ color }}>● {label}</span>
+      <span className="t-mono" style={{ fontWeight: 700, fontSize: 'var(--fs-h3)' }}>
+        {isNum(total) ? total : '—'}
+      </span>
+    </div>
+    {children}
+    {footnote && (
+      <div className="t-mono" style={{ fontSize: 'var(--fs-tiny)', opacity: 0.55, marginTop: 6 }}>{footnote}</div>
+    )}
+  </div>
+);
 
 export const LesionEvidencePanel = ({ caseData }) => {
   const c = caseData;
-  const lesions = c.lesionCounts || {};
+  const lc = c.lesionCounts;
+  const detail = lc?.detail || {};
 
-  const lesionTypes = [
-    { key: 'microaneurysms', label: 'MICROANEURYSMS', icon: '●', color: 'var(--c-crimson)' },
-    { key: 'hemorrhages', label: 'HEMORRHAGES', icon: '●', color: 'var(--c-crimson-dark)' },
-    { key: 'hardExudates', label: 'HARD EXUDATES', icon: '●', color: 'var(--c-warning)' },
-    { key: 'softExudates', label: 'SOFT EXUDATES', icon: '●', color: '#CCAA66' },
-  ];
+  const hasSplit = isNum(lc?.microaneurysms) && isNum(lc?.hemorrhages);
+  const redTotal = isNum(detail.redTotal)
+    ? detail.redTotal
+    : (hasSplit ? lc.microaneurysms + lc.hemorrhages : null);
 
   return (
     <div className="lesion-evidence" style={{ border: 'var(--border)', padding: 'var(--sp-6)' }}>
       <h3 className="t-h3 u-mb-4">LESION EVIDENCE</h3>
 
-      {/* Lesion counts */}
-      <div className="lesion-grid">
-        {lesionTypes.map(lt => {
-          const count = lesions[lt.key];
-          return (
-            <div key={lt.key} className="lesion-item">
-              <span className="lesion-item__icon" style={{ color: lt.color }}>{lt.icon}</span>
-              <span className="lesion-item__label t-label">{lt.label}</span>
-              <span className="lesion-item__count t-mono" style={{ fontWeight: 700, fontSize: 'var(--fs-h3)' }}>
-                {count !== null && count !== undefined ? count : <span style={{ opacity: 0.3 }}>N/A</span>}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      {!lc ? (
+        <p className="t-mono" style={{ opacity: 0.6 }}>
+          LESION SEGMENTATION DID NOT RUN FOR THIS CASE — no lesion counts are available, and none are shown as zero.
+        </p>
+      ) : (
+        <div style={{ display: 'grid', gap: 'var(--sp-3)' }}>
+          <Family label="RED LESIONS" color="var(--c-crimson)" total={redTotal}>
+            {hasSplit && (
+              <div className="u-flex u-gap-6 u-mt-2" style={{ flexWrap: 'wrap' }}>
+                <span className="t-mono">MICROANEURYSMS <strong>{lc.microaneurysms}</strong></span>
+                <span className="t-mono">HAEMORRHAGES <strong>{lc.hemorrhages}</strong></span>
+              </div>
+            )}
+            <Quadrants counts={detail.redPerQuadrant} />
+          </Family>
+
+          <Family
+            label="BRIGHT LESIONS (HARD EXUDATES)"
+            color="var(--c-warning)"
+            total={lc.hardExudates}
+            footnote="Cotton-wool spots (soft exudates) are not detected by this system."
+          >
+            <Quadrants counts={detail.brightPerQuadrant} />
+          </Family>
+        </div>
+      )}
 
       {/* NV Suspicion */}
       <div className="u-mt-4" style={{ borderTop: 'var(--border)', paddingTop: 'var(--sp-4)' }}>
         <div className="u-flex u-justify-between u-items-center">
           <span className="t-label">NV SUSPICION SCORE</span>
-          {c.nvSuspicionScore !== null ? (
+          {c.nvSuspicionScore !== null && c.nvSuspicionScore !== undefined ? (
             <span className={`badge ${c.nvSuspicionScore > 0.5 ? 'badge--fail' : c.nvSuspicionScore > 0.3 ? 'badge--warning' : 'badge--pass'}`}>
               {(c.nvSuspicionScore * 100).toFixed(0)}% — {c.nvSuspicionScore > 0.5 ? 'HIGH' : c.nvSuspicionScore > 0.3 ? 'MODERATE' : 'LOW'}
             </span>
