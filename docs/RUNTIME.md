@@ -60,9 +60,13 @@ Every graded case stores this per output as `engineProvenance` (see
   Each network also needs its generated `models/+<name>/` package folder on the
   path (tracked in git).
 
-### Not installed here, and needed by one feature
+### MATLAB Report Generator: installed here, used by one feature
 
-- **MATLAB Report Generator.** `explainability/generateReport.m` (the downloadable evidence-report PDF behind `GET /api/v1/cases/:caseId/report`) uses `mlreportgen.dom`, which needs this product. It is **not installed on this machine**, so the report fails with a 502 and the Case Detail button shows the failure. Grading does not depend on it, which is why it is absent from the licensed-products table above. A deployment that serves reports must install it.
+- **What uses it.** `explainability/generateReport.m`, the downloadable evidence-report PDF behind `GET /api/v1/cases/:caseId/report`, renders with `mlreportgen.dom`. Grading does not depend on it, which is why it is absent from the licensed-products table above.
+- **Installed 2026-09-27** with `mpm install --release=R2026a --destination=D:\ --products MATLAB_Report_Generator` (mpm ends "Installation failed", exit 127, only because the OS-registration step needs admin; the files are fine). It is **not** on the saved path: the installer's folders reach `pathdef.m` only through a step this machine cannot run, and `pathdef.m` is shared by every MATLAB process here, so it was deliberately left alone.
+- **How it is found instead.** `explainability/ensureReportGeneratorOnPath.m` adds the product's own folders (from `toolbox/local/path/*.phl`) to the *current process's* path, and only when they are missing. `generateReport.m` calls it first. Four folders were needed here (`toolbox/mlreportgen/re`, `toolbox/mlreportgen/rpt2api`, `toolbox/rptgen/rptgen`, `toolbox/rptgen/rptgendemos`).
+- **Fallback.** If the product is not really installed, `generateReport.m` now takes its existing core-MATLAB renderer (`generateReportFigures.m`) instead of failing the request. Its availability test used to check only the licence, which passes on a machine that never installed the product.
+- **A deployment that wants the Report Generator layout** installs the product and needs nothing else.
 
 ### Installed here but not needed by grading
 
