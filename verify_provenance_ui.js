@@ -226,6 +226,37 @@ async function main() {
       !hasText(unchecked, 'AGREES'),
       'null means nobody could check; rendering it as agreement invents a verification');
 
+    // ── 4c. A failed case must not read like a graded one ───────────────
+    // api-contracts.md: "a case with status: error must not be
+    // indistinguishable from a graded one". Every ML field is null on a failed
+    // case AND on one still grading, so without the banner the two render
+    // identically -- blanks the reader cannot interpret.
+    const { CaseStatusBanner } = await server.ssrLoadModule('src/components/screens/CaseStatusBanner.jsx');
+    const banner = (over) => renderToStaticMarkup(
+      React.createElement(CaseStatusBanner, { caseData: { ...caseDetail, ...over } }));
+
+    const gradedBanner = banner({ status: 'graded' });
+    check('a graded case shows no status banner', gradedBanner === '',
+      'the banner is for cases that have no grade; a graded one speaks for itself');
+
+    const failedBanner = banner({ status: 'error', failureCode: 'matlab_unavailable', failedAt: '2026-09-27T05:00:00.000Z' });
+    const processingBanner = banner({ status: 'processing', failureCode: null, failedAt: null });
+    check('a FAILED case says so', hasText(failedBanner, 'GRADING FAILED'));
+    check('a failed case says the blanks are missing results, not findings',
+      hasText(failedBanner, 'missing results, not findings'),
+      'an empty grade next to an empty lesion count reads as "nothing found" unless '
+      + 'the page says otherwise');
+    check('a failed case carries its code', hasText(failedBanner, 'matlab_unavailable'));
+    check('a STILL-GRADING case says something different from a failed one',
+      hasText(processingBanner, 'NOT GRADED YET') && failedBanner !== processingBanner,
+      'these are the two states the contract requires to be distinguishable');
+    check('the failure MESSAGE is not shown, only the code',
+      !hasText(failedBanner, 'failureReason') && !hasText(failedBanner, 'stack'),
+      'the message can quote internal paths; the contract serves it to admins only');
+    check('an unknown status claims nothing', banner({ status: 'something_new' }) === '',
+      'saying something definite about a state we were not told is the mistake '
+      + 'this component exists to correct');
+
     // ── 5. MATLAB Compiler forward-compatibility ────────────────────────────
     // When the pipeline moves to the compiled executable, the contract's engine
     // enum does not change: `matlab` still covers it, and `detail` says which.

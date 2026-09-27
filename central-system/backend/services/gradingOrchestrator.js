@@ -1090,14 +1090,31 @@ async function gradeCase(caseId, plainImagePath) {
   await pool.query(`
     INSERT INTO explainability_outputs
       (case_id, gradcam_path, evidence_summary_text,
-       lesion_attention_consistency_score)
-    VALUES ($1, $2, $3, $4)
+       lesion_attention_consistency_score,
+       lesion_attention_chance_level, lesion_attention_enrichment,
+       lesion_attention_flagged)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (case_id) DO UPDATE SET
       gradcam_path                       = EXCLUDED.gradcam_path,
       evidence_summary_text              = EXCLUDED.evidence_summary_text,
-      lesion_attention_consistency_score = EXCLUDED.lesion_attention_consistency_score
+      lesion_attention_consistency_score = EXCLUDED.lesion_attention_consistency_score,
+      lesion_attention_chance_level      = EXCLUDED.lesion_attention_chance_level,
+      lesion_attention_enrichment        = EXCLUDED.lesion_attention_enrichment,
+      lesion_attention_flagged           = EXCLUDED.lesion_attention_flagged
   `, [caseId, branchA.gradcamPath ?? null, mlResult.evidenceSummaryText ?? null,
-      fromMatlab(mlResult.lesionAttentionConsistency)]);
+      // The score NEVER travels alone (migration 0022). A bare overlap
+      // fraction is not interpretable: lesions covering 70% of the retina make
+      // a noise heatmap score 0.70 too. chanceLevel is what a random heatmap
+      // would score on THIS eye, and enrichment is the ratio that means
+      // something.
+      fromMatlab(mlResult.lesionAttentionConsistency),
+      fromMatlab(mlResult.lesionAttentionChanceLevel),
+      fromMatlab(mlResult.lesionAttentionEnrichment),
+      // Defined even when the score is not: a heatmap with no energy is
+      // undefined-but-flagged, because Grad-CAM producing nothing is itself a
+      // reason to review.
+      typeof mlResult.lesionAttentionFlagged === 'boolean'
+        ? mlResult.lesionAttentionFlagged : null]);
 
   // ── Step 4b: INSERT INTO segmentation_outputs ──────────────────────────────
   // This table has existed since the initial schema with exactly the columns
@@ -1171,12 +1188,12 @@ async function gradeCase(caseId, plainImagePath) {
         foveaUnreliable]);
   }
 
-  // lesion_attention_consistency_score stays NULL on purpose (Task 7.1).
-  // lesionAttentionConsistency is built and unit-tested, but it needs a lesion
-  // MASK, and Tasks 4.2/4.3 produce none. Passing it an empty mask would return
-  // NaN by design; writing a number here from anything else would be inventing
-  // one. It activates the day the segmenter lands, with no change to this file
-  // beyond adding the call.
+  // (lesion_attention_consistency_score is written in Step 4 above, from
+  // mlResult.lesionAttentionConsistency. This used to say it "stays NULL on
+  // purpose" because Tasks 4.2/4.3 produced no lesion mask -- that stopped
+  // being true when the segmenter landed, and the comment outlived it. The
+  // score is NULL only when runCasePipeline.m could not compute one, which
+  // needs the Grad-CAM map as well as the masks.)
 
   // ── Step 5: mark case as graded ────────────────────────────────────────────
   await pool.query(
@@ -1185,9 +1202,19 @@ async function gradeCase(caseId, plainImagePath) {
     // -- see migration 0016. Both engines have always returned these; until
     // now nothing stored them, while readFundusImage.m's header claimed the
     // device "is recorded as evidence".
+    //
+    // THE FAILURE COLUMNS ARE CLEARED. A case can reach here after having
+    // failed before -- the queue retries, the watchdog recovers, and a case
+    // can be re-graded by hand. Leaving failure_code / failure_reason /
+    // failed_at behind would leave a GRADED case carrying the reason it once
+    // gave up, and api-contracts.md says failureCode is "null on every case
+    // that has not failed". getCaseDetail serves the column straight, with no
+    // status check, so the stale value would be reported as this case's own.
+    // (/admin/system-health filters on status = 'error' and was never wrong.)
     `UPDATE cases SET status = 'graded', camera_family_detected = $2,
        eye_laterality_detected = $3, source_format = $4, dicom_device_model = $5,
-       camera_mismatch = $6, camera_expected_family = $7
+       camera_mismatch = $6, camera_expected_family = $7,
+       failure_code = NULL, failure_reason = NULL, failed_at = NULL
      WHERE case_id = $1`,
     [caseId, fromMatlab(mlResult.cameraFamily), detectedLaterality,
      blankToNull(fromMatlab(mlResult.sourceFormat)),

@@ -1,4 +1,4 @@
-function outputPath = gradCam(net, preprocessedImg, predictedClassIdx, outputPath)
+function [outputPath, camMap] = gradCam(net, preprocessedImg, predictedClassIdx, outputPath)
 % GRADCAM  Compute Grad-CAM heatmap and write an overlaid PNG to disk.
 %
 %   outputPath = gradCam(net, preprocessedImg, predictedClassIdx, outputPath)
@@ -13,8 +13,22 @@ function outputPath = gradCam(net, preprocessedImg, predictedClassIdx, outputPat
 %     outputPath        - char / string, full path to write the output PNG.
 %                         Parent directory must exist.
 %
-%   Output:
+%   Outputs:
 %     outputPath - same as the input path (returned for caller convenience).
+%     camMap     - the RAW Grad-CAM map, at the last conv layer's own
+%                  resolution and normalised to [0,1], BEFORE the upsample and
+%                  the colour map. Optional: callers that only want the PNG
+%                  ask for one output and are unaffected.
+%
+%                  This is the same thing branchAInfer.py returns as
+%                  `gradcamMap`, at the same stage and for the same reason:
+%                  Task 7.1 (lesionAttentionConsistency) scores attention
+%                  against a lesion mask and needs the MAP, and the overlay
+%                  PNG cannot be turned back into one -- it has already been
+%                  colour-mapped and alpha-blended with the fundus. Raw rather
+%                  than upsampled because it then travels as a few hundred
+%                  floats of JSON instead of a quarter of a million, and
+%                  runCasePipeline.m resizes it to the mask anyway.
 %
 %   Implementation note — manual Grad-CAM (not built-in gradCAM()):
 %     MATLAB's built-in gradCAM() rejects networks with residual / skip
@@ -79,6 +93,9 @@ end
 heatmap = dlfeval(@gradCamCore, net, X, lastConvName, outputLayerName, ...
                   predictedClassIdx);
 heatmap = double(heatmap);
+
+% The raw map is the second output, captured BEFORE the upsample below.
+camMap = heatmap;
 
 % ── Step 4: resize heatmap to match input image ───────────────────────────────
 [H, W, ~] = size(preprocessedImg);
