@@ -534,7 +534,9 @@ async function getCaseDetail(caseId) {
       g.claimed_by, g.claimed_at, claimant.name AS claimed_by_name,
       g.claimed_at > now() - make_interval(mins => $2) AS claim_live,
       s.lesion_counts, s.nv_suspicion_score,
-      e.gradcam_path, e.lesion_attention_consistency_score, e.evidence_summary_text
+      e.gradcam_path, e.lesion_attention_consistency_score, e.evidence_summary_text,
+      e.lesion_attention_chance_level, e.lesion_attention_enrichment,
+      e.lesion_attention_flagged
     FROM cases c
     JOIN      patients               p ON p.patient_id = c.patient_id
     LEFT JOIN grading_results        g ON g.case_id    = c.case_id
@@ -635,6 +637,17 @@ async function getCaseDetail(caseId) {
 
     // Phase 7
     lesionAttentionConsistencyScore: r.lesion_attention_consistency_score ?? null,
+    // The score is NOT interpretable alone (migration 0022). If lesions cover
+    // 70% of the retina, a heatmap of pure noise also scores 0.70. chanceLevel
+    // is what a random heatmap would score on THIS eye; enrichment is the
+    // ratio, where 1.0 is chance and above 1 is real attention; flagged is the
+    // comparison already made, next to the maths, so no surface re-derives it.
+    // A surface showing the score must show these with it.
+    lesionAttentionChanceLevel: r.lesion_attention_chance_level ?? null,
+    lesionAttentionEnrichment:  r.lesion_attention_enrichment ?? null,
+    // Meaningful even when the score is null: a heatmap with no energy is
+    // undefined-but-flagged.
+    lesionAttentionFlagged:     r.lesion_attention_flagged ?? null,
 
     questionnaireData: r.questionnaire_data ?? null,
     captureMetadata:   r.capture_metadata ?? null,

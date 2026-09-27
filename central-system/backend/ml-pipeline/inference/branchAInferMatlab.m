@@ -81,9 +81,16 @@ function out = branchAInferMatlab(tensorPath, gradcamPath)
 %     variance silently reads downstream as MAXIMUM certainty.
 % This does not affect drGradeCnn, confidenceScore, referable, or
 % conformalTier, which is what tiering and the DB write actually consume.
-% (gradcamMap/gradcamWarning, previously also listed here as gaps, are now
-% moot the same way they always were -- gradCam.m only ever returned a
-% finished PNG, unrelated to this contract change.)
+% (gradcamWarning is still not produced here: it reports attention falling
+% outside the retina, which needs the retinal mask that this function -- which
+% never touches a raw image -- does not have.)
+%
+% gradcamMap WAS listed here as moot, on the reasoning that gradCam.m "only
+% ever returned a finished PNG". That was true of gradCam.m's signature and
+% false about the system: branchAInfer.py returns the raw map, and Task 7.1's
+% lesion-attention score is computed from it, so the claim held only until
+% someone checked whether anything consumed it. gradCam.m now returns the raw
+% map as an optional second output and it is passed through below.
 
 if nargin < 2, gradcamPath = ''; end
 
@@ -348,8 +355,15 @@ end
 
 if ~isempty(gradcamPath)
     try
-        gradCam(net, td.display, gradeIdx, gradcamPath);
+        [~, camMap] = gradCam(net, td.display, gradeIdx, gradcamPath);
         out.gradcamPath = gradcamPath;
+        % The RAW map as well as the PNG. Without it the MATLAB backend was
+        % silently dropping Task 7.1: gradingOrchestrator passes
+        % branchA.gradcamMap through as camMap, runCasePipeline.m skips
+        % lesionAttentionConsistency when that is empty, and the score reached
+        % the database as NULL on every case graded on this backend -- while
+        % the same case on the Python backend got a number. Nothing errored.
+        out.gradcamMap = camMap;
     catch ME
         % Field left UNSET here, not set to [] -- jsonencode renders [] as
         % JSON [], which `branchA.gradcamPath ?? null` in gradingOrchestrator.js
