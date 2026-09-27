@@ -2,50 +2,67 @@ import React, { useState, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { QualityResultPanel } from './QualityResultPanel';
-import { CaptureMetadataForm } from './CaptureMetadataForm';
-// PatientQuestionnaireForm removed — questionnaire is now collected at registration
+import { CaptureMetadataForm, initialMetadata } from './CaptureMetadataForm';
+// PatientQuestionnaireForm removed — the patient questionnaire is collected at registration
 import { RetinalImageViewer } from './RetinalImageViewer';
 import { localApi } from '../../api/localApiClient';
 import { USE_MOCK_DATA } from '../../config';
 import { mockAiPredictions } from '../../api/mockData';
+import { LoadError } from '../shared/LoadError';
+import { CAMERA_DEVICES, EYES } from '../../api/captureOptions';
+import { buildQuestionnairePayload, buildMetadataPayload, IncompleteAnswers } from '../../api/payloads';
+import { loadQuestionnaire } from '../../api/patientSession';
 import demoFundusImg from '../../assets/fundus_eye.jpg';
 
+/** The latest registered patient, but only if it is the one this screen is for. */
+function latestPatientFor(patientId) {
+  try {
+    const p = JSON.parse(localStorage.getItem('netra_latest_patient'));
+    return p && p.patientId === patientId ? p : null;
+  } catch { return null; }
+}
+
 export const CaptureScreen = () => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const patientId = searchParams.get('patientId') || 'UNKNOWN_PATIENT';
-  const patientName = searchParams.get('name') || (() => {
-    try {
-      const p = JSON.parse(localStorage.getItem('netra_latest_patient'));
-      return p?.name;
-    } catch (e) { return null; }
-  })() || 'Krrish';
-  const patientAge = searchParams.get('age') || (() => {
-    try {
-      const p = JSON.parse(localStorage.getItem('netra_latest_patient'));
-      return p?.age;
-    } catch (e) { return null; }
-  })() || '20';
+  // The fictional 'Krrish, 20' stand-in is mock-mode only; live mode shows what
+  // it actually knows about the patient, even if that is nothing.
+  const patientName = searchParams.get('name') || latestPatientFor(patientId)?.name
+    || (USE_MOCK_DATA ? 'Krrish' : '');
+  const patientAge = searchParams.get('age') || latestPatientFor(patientId)?.age
+    || (USE_MOCK_DATA ? '20' : '');
 
   const [activeStep, setActiveStep] = useState(1);
   const [imageFile, setImageFile] = useState(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
   const [qualityResult, setQualityResult] = useState(null);
-  const [metadata, setMetadata] = useState({ eye: 'right' });
-  // questionnaire is collected during patient registration (PatientRegistrationForm)
-  const [questionnaire] = useState(() => {
-    try {
-      const p = JSON.parse(localStorage.getItem('netra_latest_patient'));
-      return p?.questionnaire || {};
-    } catch (e) {
-      return {};
-    }
-  });
+
+  // Design doc §4.1/§10.4: every capture is tagged left or right eye, and the
+  // camera is recorded, BEFORE the photograph is taken. Live mode starts with
+  // neither chosen -- the technician has to say, not accept a default.
+  const [eye, setEye] = useState(USE_MOCK_DATA ? 'right' : null);
+  const [cameraDeviceId, setCameraDeviceId] = useState(USE_MOCK_DATA ? CAMERA_DEVICES[0].id : null);
+  const [metadata, setMetadata] = useState(initialMetadata);
+
+  // The patient questionnaire is answered once, at registration, and stored per
+  // patient. Mock mode tolerates a missing one; live mode does not invent one.
+  const [questionnaire] = useState(() => loadQuestionnaire(patientId) || (USE_MOCK_DATA ? {} : null));
+
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [mockScenario, setMockScenario] = useState('pass');
+  const [isSaving, setIsSaving] = useState(false);
+  // { title, err, captureId? } for whichever live request last failed; shown in
+  // place of a result, never replaced by one.
+  const [stepError, setStepError] = useState(null);
+  const [mockScenario] = useState('pass');
+
+  // What has already been accepted by the local backend for this capture, so a
+  // second press of SAVE after a failure does not post the same answers twice.
+  const savedRef = useRef({ captureId: null, questionnaire: false, metadata: false });
 
   const fileInputRef = useRef(null);
+  const setupReady = !!eye && !!cameraDeviceId;
 
   const handleCaptureClick = () => {
     if (fileInputRef.current && !imageFile) {
@@ -58,9 +75,12 @@ export const CaptureScreen = () => {
     if (file) {
       setImageFile(file);
       setImagePreviewUrl(URL.createObjectURL(file));
+      setStepError(null);
     }
   };
 
+  // Mock mode only: a stock image stands in for the camera. In live mode this
+  // would attach a picture that is not the patient's to a real patient record.
   const handleLoadDemoImage = async (e) => {
     e?.stopPropagation();
     try {
@@ -74,75 +94,97 @@ export const CaptureScreen = () => {
     }
   };
 
+  /** A gate verdict from the local backend -> what step 2 shows. */
+  const showVerdict = (capture) => {
+    setQualityResult({
+      captureId: capture.captureId,
+      isRealCapture: true,
+      retakeCount: capture.retakeCount,
+      qualityStatus: capture.qualityStatus,
+      issues: capture.qualityReason ? [capture.qualityReason] : [],
+      // The API returns a status and a reason -- not a score or per-metric
+      // numbers -- so none are shown.
+      qualityScore: null,
+      metrics: null,
+      qualityGateEngine: capture.qualityGateEngine ?? null,
+    });
+    setStepError(null);
+    setActiveStep(2);
+  };
+
+  const gateError = (err) => ({
+    title: err.code === 'quality_gate_failed'
+      ? 'QUALITY CHECK COULD NOT RUN — THE IMAGE WAS SAVED'
+      : 'QUALITY CHECK FAILED — NO RESULT',
+    err,
+    // api-contracts.md: a 503 quality_gate_failed carries the id of the saved
+    // capture, which can be re-checked without taking the photograph again.
+    captureId: err.details?.captureId ?? null,
+  });
+
   const runQualityCheck = async () => {
-    if (!imageFile) return;
+    if (!imageFile || !setupReady) return;
 
     setIsAnalyzing(true);
+    setStepError(null);
     try {
       // ── Real local quality gate (phc-local-app/backend POST /captures) ──
-      // Runs locally on the PHC node/MATLAB quality gate engine.
-      // Under system-design-v4.md §1.2 & §1.3, local does image-quality gating ONLY;
-      // DR diagnostic grading happens centrally, not at the PHC.
-      const realCapture = await localApi.submitCapture(
-        patientId, imageFile, metadata.cameraDeviceId || 'unknown');
+      // MATLAB (compiled exe, or matlab -batch). DR grading happens centrally,
+      // not here (system-design-v4.md §1.2 & §1.3).
+      // Mock mode: returns null. Live mode: a verdict, or it throws.
+      const capture = await localApi.submitCapture(patientId, imageFile, cameraDeviceId);
 
-      let uiStatus, issues, captureIdToUse, retakeCount, qualityMetrics, qualityScore;
-
-      if (realCapture) {
-        uiStatus = realCapture.qualityStatus || 'pass';
-        issues = realCapture.qualityReason ? [realCapture.qualityReason] : [];
-        captureIdToUse = realCapture.captureId;
-        retakeCount = realCapture.retakeCount;
-        qualityScore = realCapture.qualityScore != null ? realCapture.qualityScore : (uiStatus === 'pass' ? 0.91 : (uiStatus === 'borderline' ? 0.58 : 0.28));
-        qualityMetrics = realCapture.metrics || {
-          focusScore: 0.94,
-          illuminationScore: 0.88,
-          contrastScore: 0.86,
-          retinalCoverageScore: 0.98,
-        };
-      } else {
-        // Fallback for offline/demo scenario when backend quality engine is not running
-        await new Promise(r => setTimeout(r, 600));
-        const mockDataScenario = mockAiPredictions[mockScenario] || mockAiPredictions.pass;
-        const apiStatus = mockDataScenario.imageQuality?.status || 'good';
-        uiStatus = apiStatus === 'good' ? 'pass' : (apiStatus === 'borderline' ? 'borderline' : 'retake');
-        issues = mockDataScenario.imageQuality?.issues || [];
-        captureIdToUse = `CAPT-${Date.now()}`;
-        retakeCount = undefined;
-        qualityScore = mockDataScenario.imageQuality?.qualityScore ?? (uiStatus === 'pass' ? 0.91 : (uiStatus === 'borderline' ? 0.58 : 0.28));
-        qualityMetrics = mockDataScenario.imageQuality?.metrics || {
-          focusScore: 0.94,
-          illuminationScore: 0.88,
-          contrastScore: 0.86,
-          retinalCoverageScore: 0.98,
-        };
+      if (capture) {
+        showVerdict(capture);
+        return;
       }
 
+      // MOCK MODE ONLY: scenario fixtures (submitCapture returns null only in mock mode).
+      await new Promise(r => setTimeout(r, 600));
+      const scenario = mockAiPredictions[mockScenario] || mockAiPredictions.pass;
+      const apiStatus = scenario.imageQuality?.status || 'good';
+      const uiStatus = apiStatus === 'good' ? 'pass' : (apiStatus === 'borderline' ? 'borderline' : 'retake');
+      const issues = scenario.imageQuality?.issues || [];
       setQualityResult({
-        captureId: captureIdToUse,
-        isRealCapture: !!realCapture,
-        retakeCount,
+        captureId: `CAPT-${Date.now()}`,
+        isRealCapture: false,
+        retakeCount: undefined,
         qualityStatus: uiStatus,
         issues,
-        qualityScore,
-        metrics: qualityMetrics,
+        qualityScore: scenario.imageQuality?.qualityScore ?? null,
+        metrics: scenario.imageQuality?.metrics ?? null,
         imageQuality: {
           status: uiStatus === 'pass' ? 'good' : (uiStatus === 'borderline' ? 'borderline' : 'poor'),
-          qualityScore,
-          metrics: qualityMetrics,
+          qualityScore: scenario.imageQuality?.qualityScore ?? null,
+          metrics: scenario.imageQuality?.metrics ?? null,
           issues,
-        }
+        },
       });
       setActiveStep(2);
     } catch (err) {
       console.error("Quality Check Error:", err);
-      alert("Failed to analyze image quality.");
+      setStepError(gateError(err));
     } finally {
       setIsAnalyzing(false);
     }
   };
 
+  // Re-run the gate on the image the backend already holds.
+  const retryQualityCheck = async () => {
+    if (!stepError?.captureId) return;
+    setIsAnalyzing(true);
+    try {
+      showVerdict(await localApi.recheckQuality(stepError.captureId));
+    } catch (err) {
+      setStepError(gateError({ ...err, details: err.details ?? { captureId: stepError.captureId } }));
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Retake: back to step 1 with the same eye and camera, ready for a new photograph.
   const handleRetake = () => {
+    setStepError(null);
     setImageFile(null);
     setImagePreviewUrl(null);
     setQualityResult(null);
@@ -152,75 +194,67 @@ export const CaptureScreen = () => {
 
   const handleAcceptQuality = () => setActiveStep(3);
 
-  // Translation into real contract payloads (api-contracts.md & system-design-v4.md §9.1)
-  const toRealQuestionnairePayload = (q = {}) => ({
-    riskFactors: {
-      yearsSinceDiagnosis: ['lt1', '1to5', '5to10', 'gt10'].includes(q?.yearsSinceDiagnosis)
-        ? q.yearsSinceDiagnosis
-        : (Number(q?.yearsSinceDiagnosis) >= 10 ? 'gt10'
-          : Number(q?.yearsSinceDiagnosis) >= 5 ? '5to10'
-            : Number(q?.yearsSinceDiagnosis) >= 1 ? '1to5' : 'lt1'),
-      glycemicControl: ['good', 'moderate', 'poor'].includes(q?.glycemicControl) ? q.glycemicControl : 'moderate',
-      bloodPressure: ['normal', 'high', 'unknown'].includes(q?.bloodPressure) ? q.bloodPressure : 'unknown',
-      pregnant: null,
-      // ── REAL NUMBERS, ADDITIVE TO THE BUCKETS ABOVE ────────────────────
-      yearsDiabetic: Number.isFinite(Number(q?.yearsSinceDiagnosis))
-        && String(q?.yearsSinceDiagnosis).trim() !== ''
-        ? Number(q.yearsSinceDiagnosis) : null,
-      hba1c: Number.isFinite(Number(q?.hba1c)) && String(q?.hba1c).trim() !== ''
-        ? Number(q.hba1c) : null,
-    },
-    symptoms: {
-      blurredVision: !!q?.blurredVision,
-      floaters: !!q?.floaters,
-      suddenVisionChange: !!q?.suddenVisionChange,
-      eyePain: !!q?.eyePain,
-    },
-    language: null,
-  });
-
-  const toRealCaptureMetadataPayload = (m = {}) => ({
-    cameraDeviceReported: m?.cameraDeviceId || 'unknown',
-    pupilStatus: m?.pupilDilation ? 'dilated' : 'non_dilated',
-    lightingEnvironment: 'indoor_clinic',
-    observedIssues: Array.isArray(m?.issuesNoticed) && m.issuesNoticed.length
-      ? m.issuesNoticed.filter((i) =>
-        ['glare', 'blink_or_moved', 'out_of_focus', 'media_opacity', 'eyelash_obstruction'].includes(i))
-      : ['none_noticed'],
-    workerUsabilityRating: 'clear',
-  });
+  const missingForSave = () => {
+    if (USE_MOCK_DATA) return [];
+    try {
+      buildMetadataPayload(metadata, { eye, cameraDeviceId });
+      return [];
+    } catch (e) { return e instanceof IncompleteAnswers ? e.missing : [String(e.message)]; }
+  };
 
   const handleSubmit = async () => {
+    setStepError(null);
+    setIsSaving(true);
     try {
-      // Real submissions, best-effort, only when we actually have a real
-      // captureId from the local backend (flow #2). These never throw and
-      // never block navigation — they just populate the real pipeline behind
-      // the scenes when possible.
-      if (qualityResult?.isRealCapture && qualityResult?.captureId) {
-        await localApi.submitQuestionnaire(qualityResult.captureId, toRealQuestionnairePayload(questionnaire));
-        await localApi.submitCaptureMetadata(qualityResult.captureId, toRealCaptureMetadataPayload(metadata));
-      }
+      if (!USE_MOCK_DATA) {
+        // Live: both answer sets must be ACCEPTED by the local backend. The
+        // capture cannot sync until they are (the sync manager waits for both),
+        // so a failure stays on this step with the reason, and SAVE can be
+        // pressed again. Nothing is invented: a missing answer throws.
+        if (!questionnaire) {
+          throw new IncompleteAnswers('The patient questionnaire', ['not found for this patient on this station']);
+        }
+        const questionnaireBody = buildQuestionnairePayload(questionnaire, i18n.language);
+        const metadataBody = buildMetadataPayload(metadata, { eye, cameraDeviceId });
 
-      // Unchanged: the mock local-queue entry the demo's Local Queue Table and
-      // result modal are built around. Always runs, regardless of whether the
-      // real submissions above succeeded.
-      await localApi.saveCaptureMetadata(qualityResult?.captureId || `CAPT-${Date.now()}`, {
-        patientId,
-        patientName,
-        patientAge,
-        metadata,
-        questionnaire: questionnaire || {},
-        aiPrediction: qualityResult?.aiPrediction,
-        imagePreviewUrl: imagePreviewUrl || demoFundusImg
-      });
+        const id = qualityResult.captureId;
+        if (savedRef.current.captureId !== id) savedRef.current = { captureId: id, questionnaire: false, metadata: false };
+        if (!savedRef.current.questionnaire) {
+          await localApi.submitQuestionnaire(id, questionnaireBody);
+          savedRef.current.questionnaire = true;
+        }
+        if (!savedRef.current.metadata) {
+          await localApi.submitCaptureMetadata(id, metadataBody);
+          savedRef.current.metadata = true;
+        }
+      } else {
+        // Mock: the client-side demo queue entry the Local Queue Table and
+        // result modal are built around.
+        await localApi.saveCaptureMetadata(qualityResult?.captureId || `CAPT-${Date.now()}`, {
+          patientId,
+          patientName,
+          patientAge,
+          metadata,
+          questionnaire: questionnaire || {},
+          aiPrediction: qualityResult?.aiPrediction,
+          imagePreviewUrl: imagePreviewUrl || demoFundusImg
+        });
+      }
       navigate('/queue');
     } catch (err) {
       console.error('Failed to save capture data:', err);
-      alert('Failed to save capture data');
+      setStepError({
+        title: err instanceof IncompleteAnswers ? 'ANSWERS INCOMPLETE — NOT SAVED' : 'QUESTIONNAIRE / CAPTURE DETAILS NOT SAVED',
+        err,
+      });
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const eyeLabel = metadata.eye === 'left' ? 'LEFT EYE (OS)' : 'RIGHT EYE (OD)';
+  const eyeLabel = eye === 'left' ? 'LEFT EYE (OS)' : eye === 'right' ? 'RIGHT EYE (OD)' : 'EYE NOT CHOSEN';
+  const missing = activeStep === 3 ? missingForSave() : [];
+  const canSave = !isSaving && missing.length === 0 && (USE_MOCK_DATA || !!questionnaire);
 
   return (
     <div className="capture-screen-root">
@@ -228,7 +262,7 @@ export const CaptureScreen = () => {
       <div className="cs-titlebar">
         <h1 className="t-h1 cs-title">{t('capture.title', 'IMAGE CAPTURE')}</h1>
         <span className="cs-patient-id">
-          {t('capture.patient', 'PATIENT:')} <strong style={{ color: 'var(--c-crimson, #CC0000)' }}>{patientName.toUpperCase()}</strong> ({patientId}) {patientAge ? `• ${patientAge}Y` : ''}
+          {t('capture.patient', 'PATIENT:')} <strong style={{ color: 'var(--c-crimson, #CC0000)' }}>{(patientName || '—').toUpperCase()}</strong> ({patientId}) {patientAge ? `• ${patientAge}Y` : ''}
         </span>
       </div>
 
@@ -271,7 +305,7 @@ export const CaptureScreen = () => {
                 LIVE FEED
               </span>
               <span className="cs-img-strip__label cs-img-strip__label--active">
-                CAPTURED
+                CAPTURED — {eyeLabel}
               </span>
             </div>
           )}
@@ -290,6 +324,7 @@ export const CaptureScreen = () => {
             style={{ display: 'none' }}
             ref={fileInputRef}
             onChange={handleFileChange}
+            data-testid="fundus-file-input"
           />
 
           {/* Image area — fully scaled, object-fit: contain, no cropping, zoomable */}
@@ -300,14 +335,16 @@ export const CaptureScreen = () => {
               <div className="cs-img-placeholder">
                 <div className="cs-img-placeholder__icon">◎</div>
                 <div className="t-mono cs-img-placeholder__text">{t('capture.clickToInitiate', 'CLICK TO INITIATE CAPTURE SEQUENCE')}</div>
-                <button
-                  type="button"
-                  className="btn btn--outline"
-                  style={{ fontSize: '0.72rem', padding: '6px 14px', zIndex: 10 }}
-                  onClick={handleLoadDemoImage}
-                >
-                  {t('capture.loadSample', '✦ LOAD SAMPLE RETINAL SCAN')}
-                </button>
+                {USE_MOCK_DATA && (
+                  <button
+                    type="button"
+                    className="btn btn--outline"
+                    style={{ fontSize: '0.72rem', padding: '6px 14px', zIndex: 10 }}
+                    onClick={handleLoadDemoImage}
+                  >
+                    {t('capture.loadSample', '✦ LOAD SAMPLE RETINAL SCAN')}
+                  </button>
+                )}
               </div>
             )}
             {/* Crosshair when empty */}
@@ -317,11 +354,16 @@ export const CaptureScreen = () => {
           {/* Bottom controls — step 1 only */}
           {imageFile && activeStep === 1 && (
             <div className="cs-bottom-bar">
+              {!setupReady && (
+                <div className="t-mono" style={{ fontSize: 12, color: 'var(--c-crimson, #C42B2B)', marginBottom: 8 }}>
+                  Choose the eye and the camera (right panel) before running the quality check.
+                </div>
+              )}
               <div className="cs-bottom-bar__actions">
                 <button className="btn btn--outline cs-retake-btn" onClick={handleRetake} disabled={isAnalyzing}>
                   {t('capture.btnRetake', 'RETAKE')}
                 </button>
-                <button className="btn cs-run-check-btn" onClick={runQualityCheck} disabled={isAnalyzing}>
+                <button className="btn cs-run-check-btn" onClick={runQualityCheck} disabled={isAnalyzing || !setupReady}>
                   {isAnalyzing ? t('capture.btnAnalyzing', 'ANALYZING... ✦') : 'RUN QUALITY CHECK →'}
                 </button>
               </div>
@@ -331,28 +373,95 @@ export const CaptureScreen = () => {
 
         {/* ═══ RIGHT: Context Panel ═══ */}
         <div className="cs-right-col">
-
-          {/* ─── STEP 1: Instructions ─── */}
-          {activeStep === 1 && (
-            <div className="cs-instructions">
-              <h2 className="t-h3 cs-instr-title">
-                {t('capture.instructionsTitle', 'INSTRUCTIONS')}
-              </h2>
-              <div className="cs-instr-divider" />
-              <ul className="cs-instr-list">
-                {t('capture.instructions', { returnObjects: true }).map((instruction, idx) => (
-                  <li key={idx} className="cs-instr-item">
-                    <span className="cs-instr-num">0{idx + 1}</span>
-                    <span>{instruction}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+          {stepError && (
+            <>
+              <LoadError error={stepError.err} title={stepError.title} compact />
+              {stepError.captureId && activeStep === 1 && (
+                <button
+                  type="button"
+                  className="btn btn--lg"
+                  onClick={retryQualityCheck}
+                  disabled={isAnalyzing}
+                  style={{ margin: '8px 0 16px', width: '100%', justifyContent: 'center' }}
+                >
+                  {isAnalyzing ? 'CHECKING…' : '↻ RETRY QUALITY CHECK ON THE SAVED IMAGE'}
+                </button>
+              )}
+            </>
           )}
 
-          {/* ─── STEP 2: Quality Gate (matches reference image 2) ─── */}
+          {/* ─── STEP 1: eye + camera, then instructions ─── */}
+          {activeStep === 1 && (
+            <>
+              <div className="meta-card" style={{ marginBottom: 16 }}>
+                <div className="meta-card__header">
+                  <h3 className="meta-card__title">BEFORE YOU CAPTURE</h3>
+                </div>
+                <div className="meta-card__body">
+                  <div className="meta-field">
+                    <label className="meta-label">
+                      EYE BEING PHOTOGRAPHED <span style={{ color: 'var(--c-crimson, #C42B2B)' }}>*</span>
+                    </label>
+                    <div className="meta-eye-toggle" data-testid="eye-choice">
+                      {EYES.map((o) => (
+                        <button
+                          key={o.id}
+                          type="button"
+                          className={`meta-eye-btn ${eye === o.id ? 'meta-eye-btn--active' : ''}`}
+                          onClick={() => setEye(o.id)}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="meta-field">
+                    <label className="meta-label">
+                      CAMERA <span style={{ color: 'var(--c-crimson, #C42B2B)' }}>*</span>
+                    </label>
+                    <div className="select-wrap">
+                      <select
+                        className="select meta-select"
+                        value={cameraDeviceId || ''}
+                        onChange={(e) => setCameraDeviceId(e.target.value || null)}
+                        data-testid="camera-choice"
+                      >
+                        <option value="" disabled>SELECT CAMERA…</option>
+                        {CAMERA_DEVICES.map((cam) => (
+                          <option key={cam.id} value={cam.id}>{cam.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="cs-instructions">
+                <h2 className="t-h3 cs-instr-title">
+                  {t('capture.instructionsTitle', 'INSTRUCTIONS')}
+                </h2>
+                <div className="cs-instr-divider" />
+                <ul className="cs-instr-list">
+                  {t('capture.instructions', { returnObjects: true }).map((instruction, idx) => (
+                    <li key={idx} className="cs-instr-item">
+                      <span className="cs-instr-num">0{idx + 1}</span>
+                      <span>{instruction}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          )}
+
+          {/* ─── STEP 2: Quality Gate ─── */}
           {activeStep === 2 && qualityResult && (
             <div className="cs-quality-panel">
+              {qualityResult.retakeCount > 0 && (
+                <div className="t-mono" style={{ fontSize: 12, marginBottom: 8, opacity: 0.8 }}>
+                  RETAKE ATTEMPT {qualityResult.retakeCount + 1} FOR THIS PATIENT TODAY
+                </div>
+              )}
               <QualityResultPanel
                 result={qualityResult}
                 onRetake={handleRetake}
@@ -361,16 +470,29 @@ export const CaptureScreen = () => {
             </div>
           )}
 
-          {/* ─── STEP 3: Metadata & Sync (matches reference image 4) ─── */}
+          {/* ─── STEP 3: Metadata & Sync ─── */}
           {activeStep === 3 && (
             <div className="cs-meta-panel">
-              <CaptureMetadataForm
-                value={metadata}
-                onChange={(newMeta) => setMetadata(newMeta)}
-              />
+              {!USE_MOCK_DATA && !questionnaire && (
+                <LoadError
+                  compact
+                  title="PATIENT QUESTIONNAIRE NOT FOUND"
+                  error={{ message: 'This station has no questionnaire answers for this patient, and none are invented. '
+                    + 'Register the patient again to record them.' }}
+                />
+              )}
+              <div className="t-mono" style={{ fontSize: 12, margin: '0 0 8px', opacity: 0.85 }}>
+                {eyeLabel} · CAMERA: {CAMERA_DEVICES.find((c) => c.id === cameraDeviceId)?.label || '—'}
+              </div>
+              <CaptureMetadataForm value={metadata} onChange={setMetadata} />
               <div className="cs-meta-footer">
-                <button className="btn cs-sync-btn" onClick={handleSubmit}>
-                  SAVE & SYNC TO SERVER →
+                {missing.length > 0 && (
+                  <div className="t-mono" style={{ fontSize: 12, color: 'var(--c-crimson, #C42B2B)', marginBottom: 8 }}>
+                    Still to answer: {missing.join(' · ')}
+                  </div>
+                )}
+                <button className="btn cs-sync-btn" onClick={handleSubmit} disabled={!canSave}>
+                  {isSaving ? 'SAVING…' : 'SAVE & SYNC TO SERVER →'}
                 </button>
               </div>
             </div>

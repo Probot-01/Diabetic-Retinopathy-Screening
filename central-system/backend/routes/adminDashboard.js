@@ -54,6 +54,16 @@ router.get('/referrals', adminOnly, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Every PHC site with its recent activity. The API key / hash are never part of
+// the response (analytics.getPhcs does not select them).
+router.get('/phcs', adminOnly, async (req, res, next) => {
+  try {
+    const body = await analytics.getPhcs();
+    await logAccess(req.user?.userId, 'view_phcs', 'phc_list');
+    res.json(body);
+  } catch (err) { next(err); }
+});
+
 router.get('/system-health', adminOnly, async (req, res, next) => {
   try {
     const body = await getSystemHealth();

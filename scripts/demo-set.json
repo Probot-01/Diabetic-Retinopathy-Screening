@@ -1,0 +1,28 @@
+{
+  "_comment": "The demo set for scripts/demo-reset.js. Public-dataset images only (IDRiD Disease Grading, Testing Set). Names are obviously fictional. `expect` is checked against what the REAL pipeline produced (screened on 2026-09-27: normal 041/044 -> CNN 0 / rule 0 agree; referable 020/010 -> 2 / 2 agree, Tier B; disagreement 005 -> CNN 4 vs rule engine 1). A model or threshold change can move these, which is why the script verifies them and fails loudly rather than assuming. `review` is applied through the real review API as the demo ophthalmologist; entries without it are left UNREVIEWED for the live review scene.",
+  "cases": [
+    { "role": "normal", "idrid": "041", "name": "Demo Patient One", "age": 38, "eye": "right",
+      "risk": { "yearsSinceDiagnosis": "lt1", "glycemicControl": "good", "bloodPressure": "normal", "pregnant": null },
+      "symptoms": { "blurredVision": false, "floaters": false, "suddenVisionChange": false, "eyePain": false },
+      "expect": { "agree": true, "referable": false },
+      "review": { "decision": "confirm" } },
+    { "role": "normal", "idrid": "044", "name": "Demo Patient Two", "age": 44, "eye": "left",
+      "risk": { "yearsSinceDiagnosis": "1to5", "glycemicControl": "good", "bloodPressure": "normal", "pregnant": null },
+      "symptoms": { "blurredVision": false, "floaters": false, "suddenVisionChange": false, "eyePain": false },
+      "expect": { "agree": true, "referable": false },
+      "review": { "decision": "confirm" } },
+    { "role": "referable", "idrid": "020", "name": "Demo Patient Three", "age": 57, "eye": "left",
+      "risk": { "yearsSinceDiagnosis": "5to10", "glycemicControl": "poor", "bloodPressure": "high", "pregnant": null },
+      "symptoms": { "blurredVision": true, "floaters": false, "suddenVisionChange": false, "eyePain": false },
+      "expect": { "agree": true, "referable": true } },
+    { "role": "referable", "idrid": "010", "name": "Demo Patient Four", "age": 52, "eye": "right",
+      "risk": { "yearsSinceDiagnosis": "1to5", "glycemicControl": "moderate", "bloodPressure": "normal", "pregnant": null },
+      "symptoms": { "blurredVision": true, "floaters": true, "suddenVisionChange": false, "eyePain": false },
+      "expect": { "agree": true, "referable": true } },
+    { "role": "disagreement", "idrid": "005", "name": "Demo Patient Five", "age": 61, "eye": "left",
+      "risk": { "yearsSinceDiagnosis": "gt10", "glycemicControl": "poor", "bloodPressure": "high", "pregnant": null },
+      "symptoms": { "blurredVision": true, "floaters": true, "suddenVisionChange": false, "eyePain": false },
+      "expect": { "agree": false },
+      "review": { "decision": "override", "correctedGrade": 4, "category": "lesion_missed" } }
+  ]
+}

@@ -2,15 +2,20 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { localApi } from '../../api/localApiClient';
+import { USE_MOCK_DATA } from '../../config';
 import { RetinalWaveCanvas } from '../shared/RetinalWaveCanvas';
+import { LoadError } from '../shared/LoadError';
+import { saveQuestionnaire } from '../../api/patientSession';
+import { BLOOD_PRESSURE } from '../../api/captureOptions';
 
-/* ── tiny internal questionnaire ─────────────────────────── */
-const BLOOD_PRESSURE_OPTIONS = [
-  { value: 'normal',   label: 'Normal' },
-  { value: 'high',     label: 'High (Hypertension)' },
-  { value: 'low',      label: 'Low (Hypotension)' },
-  { value: 'unknown',  label: 'Unknown' },
-];
+// Mock mode opens the form pre-filled with a clearly fictional patient for
+// rapid testing. Live mode opens it empty — and with consent NOT ticked: a
+// technician must record consent for the real person in front of them.
+const demo = (value, empty = '') => (USE_MOCK_DATA ? value : empty);
+
+/* ── questionnaire options: exactly the API's values (api-contracts.md) ── */
+// (The form used to offer "Low (Hypotension)", which the API does not accept.)
+const BLOOD_PRESSURE_OPTIONS = BLOOD_PRESSURE.map((o) => ({ value: o.id, label: o.label }));
 
 const EYE_SYMPTOMS = [
   { id: 'blurredVision',      label: 'BLURRED VISION' },
@@ -69,47 +74,98 @@ export const PatientRegistrationForm = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
 
-  /* ── patient-info (prefilled with realistic mock data for rapid testing) ── */
+  const [submitError, setSubmitError] = useState(null);
+
+  /* ── patient-info (mock mode: prefilled fictional patient, see demo()) ── */
   const [patientType, setPatientType] = useState('new');
-  const [abhaId, setAbhaId] = useState('91827364501928');
-  const [visitNo, setVisitNo] = useState('1');
-  const [title, setTitle] = useState('Mrs');
-  const [firstName, setFirstName] = useState('Sunita');
-  const [middleName, setMiddleName] = useState('K.');
-  const [lastName, setLastName] = useState('Devi');
-  const [gender, setGender] = useState('female');
-  const [dob, setDob] = useState('12/03/1972');
-  const [age, setAge] = useState('54');
-  const [maritalStatus, setMaritalStatus] = useState('married');
-  const [bloodGroup, setBloodGroup] = useState('B+');
+  const [abhaId, setAbhaId] = useState(demo('91827364501928'));
+  const [visitNo, setVisitNo] = useState(demo('1'));
+  const [title, setTitle] = useState(demo('Mrs', 'Mr'));
+  const [firstName, setFirstName] = useState(demo('Sunita'));
+  const [middleName, setMiddleName] = useState(demo('K.'));
+  const [lastName, setLastName] = useState(demo('Devi'));
+  const [gender, setGender] = useState(demo('female'));
+  const [dob, setDob] = useState(demo('12/03/1972'));
+  const [age, setAge] = useState(demo('54'));
+  const [maritalStatus, setMaritalStatus] = useState(demo('married'));
+  const [bloodGroup, setBloodGroup] = useState(demo('B+', 'Unknown'));
 
   /* ── address ──────────────────────────────────────────── */
-  const [address, setAddress] = useState('Plot No. 24, Near Gram Panchayat, Village Rampur');
-  const [state, setState] = useState('Maharashtra');
-  const [pincode, setPincode] = useState('413102');
-  const [district, setDistrict] = useState('Solapur');
-  const [occupation, setOccupation] = useState('homemaker');
-  const [contactNumber, setContactNumber] = useState('+919876543210');
-  const [altPhone, setAltPhone] = useState('+919811223344');
+  const [address, setAddress] = useState(demo('Plot No. 24, Near Gram Panchayat, Village Rampur'));
+  const [state, setState] = useState(demo('Maharashtra'));
+  const [pincode, setPincode] = useState(demo('413102'));
+  const [district, setDistrict] = useState(demo('Solapur'));
+  const [occupation, setOccupation] = useState(demo('homemaker'));
+  const [contactNumber, setContactNumber] = useState(demo('+919876543210'));
+  const [altPhone, setAltPhone] = useState(demo('+919811223344'));
+
+  /* ── duplicate check (design doc SS10.3, backend plan SSB.1) ──────────────
+     The same person registered twice becomes two patient records with two
+     separate screening histories and nothing pointing between them. The
+     search endpoint has existed since B.1 and nothing called it. */
+  const [dupes, setDupes] = useState([]);
+  const [dupeChecked, setDupeChecked] = useState(false);
+
+  // Debounced, and only once there is enough to search on -- the server
+  // refuses a search on age alone because it would return most of the
+  // register. Failures are swallowed on purpose: this is an ADVISORY check,
+  // and a search that errors must never block a registration.
+  useEffect(() => {
+    const fullName = [firstName, middleName, lastName].filter(Boolean).join(' ').trim();
+    const hasName = fullName.length >= 3;
+    const hasPhone = String(contactNumber || '').replace(/\D/g, '').length >= 4;
+    if (!hasName && !hasPhone) { setDupes([]); setDupeChecked(false); return undefined; }
+
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const found = await localApi.searchPatients({
+          name: fullName, phone: contactNumber, age,
+        });
+        if (!cancelled) { setDupes(found || []); setDupeChecked(true); }
+      } catch {
+        if (!cancelled) { setDupes([]); setDupeChecked(false); }
+      }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [firstName, middleName, lastName, contactNumber, age]);
 
   /* ── questionnaire ────────────────────────────────────── */
-  const [knownDiabetic, setKnownDiabetic] = useState(true);
-  const [yearsSinceDx, setYearsSinceDx] = useState('5to10');
-  const [glycemicControl, setGlycemicControl] = useState('moderate');
-  const [bloodPressure, setBloodPressure] = useState('high');
-  const [pregnancy, setPregnancy] = useState('not_applicable');
+  // Live mode starts with NOTHING answered (null / ''): "no skip" means every
+  // question needs an answer the technician gave. A pre-selected 'moderate',
+  // 'normal' or 'not applicable' would be an answer nobody gave.
+  const [knownDiabetic, setKnownDiabetic] = useState(demo(true, null));
+  const [yearsSinceDx, setYearsSinceDx] = useState(demo('5to10', ''));
+  const [glycemicControl, setGlycemicControl] = useState(demo('moderate', ''));
+  const [bloodPressure, setBloodPressure] = useState(demo('high', ''));
+  const [pregnancy, setPregnancy] = useState(demo('not_applicable', ''));
   const [eyeSymptoms, setEyeSymptoms] = useState({
-    blurredVision: true, floaters: false, suddenVisionChange: false, eyePain: false,
+    blurredVision: demo(true, false), floaters: false, suddenVisionChange: false, eyePain: false,
   });
+  // Symptoms are yes/no each, so "none of these" must be tapped -- an untouched
+  // symptom list is not the same as "the patient has no symptoms".
+  const [noSymptoms, setNoSymptoms] = useState(false);
 
   /* ── consent ──────────────────────────────────────────── */
-  const [consentObtained, setConsentObtained] = useState(true);
-  const [consentGivenAt, setConsentGivenAt] = useState(() => new Date().toISOString());
+  const [consentObtained, setConsentObtained] = useState(demo(true, false));
+  const [consentGivenAt, setConsentGivenAt] = useState(() => (USE_MOCK_DATA ? new Date().toISOString() : null));
 
   /* derived */
   const parsedAge = parseInt(age, 10);
   const couldBePregnant = !age || isNaN(parsedAge) || parsedAge < 55;
   const fullName = [firstName, middleName, lastName].filter(Boolean).join(' ');
+
+  // Every question answered? (Years since diagnosis is only asked of known
+  // diabetics; pregnancy only where it could apply.)
+  const symptomsAnswered = noSymptoms || Object.values(eyeSymptoms).some(Boolean);
+  const questionnaireMissing = [
+    knownDiabetic === null && 'known diabetic?',
+    knownDiabetic === true && !yearsSinceDx && 'years since diagnosis',
+    !glycemicControl && 'glycemic control',
+    !bloodPressure && 'blood pressure',
+    couldBePregnant && !pregnancy && 'pregnancy',
+    !symptomsAnswered && 'eye symptoms (or "none of these")',
+  ].filter(Boolean);
 
   /* auto-compute age from DOB */
   useEffect(() => {
@@ -122,8 +178,14 @@ export const PatientRegistrationForm = () => {
     if (computed > 0 && computed < 120) setAge(String(computed));
   }, [dob]);
 
-  const toggleSymptom = (id) =>
+  const toggleSymptom = (id) => {
+    setNoSymptoms(false);
     setEyeSymptoms(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+  const chooseNoSymptoms = () => {
+    setNoSymptoms(true);
+    setEyeSymptoms({ blurredVision: false, floaters: false, suddenVisionChange: false, eyePain: false });
+  };
 
   const handleConsentChange = (e) => {
     const checked = e.target.checked;
@@ -137,8 +199,8 @@ export const PatientRegistrationForm = () => {
     setGender(''); setDob(''); setAge(''); setMaritalStatus(''); setBloodGroup('Unknown');
     setAddress(''); setState(''); setPincode(''); setDistrict('');
     setOccupation(''); setContactNumber(''); setAltPhone('');
-    setKnownDiabetic(false); setYearsSinceDx('1to5'); setGlycemicControl('moderate');
-    setBloodPressure('normal'); setPregnancy('not_applicable');
+    setKnownDiabetic(null); setYearsSinceDx(''); setGlycemicControl('');
+    setBloodPressure(''); setPregnancy(''); setNoSymptoms(false);
     setEyeSymptoms({ blurredVision: false, floaters: false, suddenVisionChange: false, eyePain: false });
     setConsentObtained(false); setConsentGivenAt(null);
   };
@@ -149,7 +211,12 @@ export const PatientRegistrationForm = () => {
       alert('Informed verbal consent is required before initiating screening.');
       return;
     }
+    if (!USE_MOCK_DATA && questionnaireMissing.length) {
+      setSubmitError({ message: 'Answer every question before capture: ' + questionnaireMissing.join(', ') + '.' });
+      return;
+    }
     setLoading(true);
+    setSubmitError(null);
     try {
       const payload = {
         name: fullName || firstName,
@@ -162,13 +229,22 @@ export const PatientRegistrationForm = () => {
         gender, dob, maritalStatus, bloodGroup,
         address, state, pincode, district, occupation, altPhone,
         questionnaire: {
-          knownDiabetic, yearsSinceDiagnosis: yearsSinceDx,
-          glycemicControl, bloodPressure, pregnancy,
+          knownDiabetic,
+          // The API has no "not diabetic" value for this question and requires
+          // one of the four buckets. For a patient who is not a known diabetic
+          // it is recorded as '< 1 yr' -- and the form says so on screen; it is
+          // never quietly a leftover default.
+          yearsSinceDiagnosis: knownDiabetic ? yearsSinceDx : 'lt1',
+          glycemicControl, bloodPressure,
+          // Not asked (and sent as null) where pregnancy cannot apply.
+          pregnancy: couldBePregnant ? pregnancy : 'not_applicable',
           ...eyeSymptoms,
         },
         consentGivenAt: consentGivenAt || new Date().toISOString(),
       };
       const newPatient = await localApi.registerPatient(payload);
+      // Kept PER PATIENT for the capture screen to attach to each capture.
+      saveQuestionnaire(newPatient.patientId, payload.questionnaire);
       try {
         localStorage.setItem('netra_latest_patient', JSON.stringify({ ...newPatient, ...payload }));
         const existing = JSON.parse(localStorage.getItem('netra_registered_patients') || '[]');
@@ -182,8 +258,9 @@ export const PatientRegistrationForm = () => {
       }).toString();
       navigate(`/capture?${query}`);
     } catch (err) {
+      // Not registered: stay on the form with everything the technician typed.
       console.error(err);
-      alert('Failed to register patient');
+      setSubmitError(err);
     } finally {
       setLoading(false);
     }
@@ -344,27 +421,28 @@ export const PatientRegistrationForm = () => {
 
         <div className="reg-questionnaire-card">
 
-          {/* Known Diabetic */}
-          <div className="reg-q-row reg-q-row--inline">
-            <span className="meta-label">KNOWN DIABETIC?</span>
-            <div
-              className={`meta-toggle ${knownDiabetic ? 'meta-toggle--active' : ''}`}
-              onClick={() => setKnownDiabetic(v => !v)}
-              role="switch"
-              aria-checked={knownDiabetic}
-              tabIndex={0}
-              onKeyDown={e => e.key === ' ' && setKnownDiabetic(v => !v)}
-            >
-              <div className="meta-toggle__track">
-                <div className="meta-toggle__thumb" />
-              </div>
+          {/* Known Diabetic -- an explicit YES / NO, not a toggle that starts on an answer */}
+          <div className="reg-q-row">
+            <span className="meta-label">KNOWN DIABETIC? <span className="reg-req">*</span></span>
+            <div className="reg-chip-group">
+              {[{ v: true, label: 'YES' }, { v: false, label: 'NO' }].map((o) => (
+                <button key={o.label} type="button"
+                  className={`reg-chip${knownDiabetic === o.v ? ' reg-chip--active' : ''}`}
+                  onClick={() => setKnownDiabetic(o.v)}
+                >{o.label}</button>
+              ))}
             </div>
+            {knownDiabetic === false && (
+              <div className="t-mono" style={{ fontSize: 11, opacity: 0.8, marginTop: 6 }}>
+                The record has no "not diabetic" value for years since diagnosis; it will be stored as "&lt; 1 yr".
+              </div>
+            )}
           </div>
 
           {/* Years Since Diagnosis (conditional) */}
           {knownDiabetic && (
             <div className="reg-q-row">
-              <span className="meta-label">YEARS SINCE DIAGNOSIS</span>
+              <span className="meta-label">YEARS SINCE DIAGNOSIS <span className="reg-req">*</span></span>
               <div className="reg-chip-group">
                 {[
                   { id: 'lt1',   label: '< 1 YR'    },
@@ -383,7 +461,7 @@ export const PatientRegistrationForm = () => {
 
           {/* Glycemic Control */}
           <div className="reg-q-row">
-            <span className="meta-label">GLYCEMIC CONTROL (BLOOD SUGAR)</span>
+            <span className="meta-label">GLYCEMIC CONTROL (BLOOD SUGAR) <span className="reg-req">*</span></span>
             <div className="reg-chip-group">
               {[
                 { id: 'good',     label: 'GOOD'     },
@@ -400,10 +478,11 @@ export const PatientRegistrationForm = () => {
 
           {/* Blood Pressure */}
           <div className="reg-q-row">
-            <span className="meta-label">BLOOD PRESSURE STATUS</span>
+            <span className="meta-label">BLOOD PRESSURE STATUS <span className="reg-req">*</span></span>
             <select className="select meta-select"
               value={bloodPressure}
               onChange={e => setBloodPressure(e.target.value)}>
+              <option value="" disabled>SELECT…</option>
               {BLOOD_PRESSURE_OPTIONS.map(o => (
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
@@ -413,7 +492,7 @@ export const PatientRegistrationForm = () => {
           {/* Pregnancy */}
           {couldBePregnant && (
             <div className="reg-q-row">
-              <span className="meta-label">CURRENTLY PREGNANT?</span>
+              <span className="meta-label">CURRENTLY PREGNANT? <span className="reg-req">*</span></span>
               <div className="reg-chip-group">
                 {[
                   { id: 'yes',            label: 'YES' },
@@ -431,7 +510,7 @@ export const PatientRegistrationForm = () => {
 
           {/* Eye Symptoms */}
           <div className="reg-q-row">
-            <span className="meta-label">CURRENT EYE SYMPTOMS (SELECT ALL THAT APPLY)</span>
+            <span className="meta-label">CURRENT EYE SYMPTOMS (SELECT ALL THAT APPLY) <span className="reg-req">*</span></span>
             <div className="reg-chip-group reg-chip-group--grid">
               {EYE_SYMPTOMS.map(sym => (
                 <button key={sym.id} type="button"
@@ -442,6 +521,13 @@ export const PatientRegistrationForm = () => {
                   {sym.label}
                 </button>
               ))}
+              <button type="button"
+                className={`reg-chip${noSymptoms ? ' reg-chip--active' : ''}`}
+                onClick={chooseNoSymptoms}
+              >
+                {noSymptoms && <span className="reg-chip__check">✓ </span>}
+                NONE OF THESE
+              </button>
             </div>
           </div>
         </div>
@@ -467,6 +553,65 @@ export const PatientRegistrationForm = () => {
         </div>
 
         {/* ── 5. FOOTER ACTIONS ───────────────────────────── */}
+        {!USE_MOCK_DATA && questionnaireMissing.length > 0 && (
+          <div className="t-mono" data-testid="questionnaire-missing"
+            style={{ fontSize: 12, color: 'var(--c-crimson, #C42B2B)', margin: '8px 0' }}>
+            Still to answer before capture: {questionnaireMissing.join(' · ')}
+          </div>
+        )}
+        {/* ── POSSIBLE DUPLICATE ────────────────────────────────────────
+            Advisory, never blocking. The worker is in front of the patient
+            and knows things this check cannot -- two sisters at one address
+            share a surname and a phone. So it shows what matched and lets
+            them decide, rather than refusing the registration.
+
+            matchedOn is shown because WHICH field matched is the whole
+            signal: a shared name is weak evidence, a shared phone number is
+            strong, and collapsing them into one score would hide that. */}
+        {dupeChecked && dupes.length > 0 && (
+          <div
+            className="meta-card"
+            data-testid="duplicate-warning"
+            style={{ borderLeft: '3px solid var(--c-amber, #d29922)' }}
+          >
+            <div className="meta-card__header">
+              <h3 className="meta-card__title">
+                POSSIBLE DUPLICATE — {dupes.length} EXISTING PATIENT
+                {dupes.length > 1 ? 'S' : ''}
+              </h3>
+            </div>
+            <div className="meta-card__body">
+              <p style={{ fontSize: '12px', opacity: 0.75, marginTop: 0 }}>
+                Someone matching these details is already registered. Registering
+                again creates a second record with a separate screening history.
+                Check before continuing — you can still register if this is a
+                different person.
+              </p>
+              {dupes.slice(0, 5).map((d) => (
+                <div
+                  key={d.patientId}
+                  className="u-flex u-items-center u-gap-2"
+                  style={{ padding: '6px 0', borderTop: 'var(--border)' }}
+                >
+                  <span style={{ fontWeight: 700 }}>{d.name}</span>
+                  <span className="t-mono" style={{ fontSize: '11px', opacity: 0.7 }}>
+                    {d.patientReference || d.patientId}
+                  </span>
+                  {d.age != null && (
+                    <span style={{ fontSize: '11px', opacity: 0.7 }}>age {d.age}</span>
+                  )}
+                  {Array.isArray(d.matchedOn) && d.matchedOn.length > 0 && (
+                    <span className="badge badge--neutral" style={{ fontSize: '10px' }}>
+                      matched on {d.matchedOn.join(' + ')}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {submitError && <LoadError error={submitError} title="PATIENT NOT REGISTERED" compact />}
         <div className="reg-footer">
           <button type="button" className="btn btn--outline" onClick={handleClearAll}>
             <span>CLEAR ALL</span>
@@ -474,7 +619,10 @@ export const PatientRegistrationForm = () => {
           <button
             type="submit"
             className="btn btn--lg"
-            disabled={loading || !consentObtained || !firstName || !contactNumber}
+            disabled={loading || !consentObtained || !firstName || !contactNumber
+              || (!USE_MOCK_DATA && questionnaireMissing.length > 0)}
+            title={!USE_MOCK_DATA && questionnaireMissing.length
+              ? 'Still to answer: ' + questionnaireMissing.join(', ') : undefined}
           >
             <span>{loading ? 'REGISTERING...' : 'INITIATE CAPTURE →'}</span>
           </button>

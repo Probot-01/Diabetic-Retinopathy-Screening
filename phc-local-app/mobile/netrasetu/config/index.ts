@@ -26,11 +26,14 @@ export interface AppConfig {
 /** kv key the device's overrides are stored under. */
 export const CONFIG_KV_KEY = 'config';
 
+// No hardcoded server: unset EXPO_PUBLIC_CENTRAL_API_URL leaves the address
+// empty, and every request then fails with "not set -- open Settings"
+// (api/central.ts) instead of quietly trying an emulator-only address.
 export const DEFAULT_CONFIG: AppConfig = {
-  centralUrl: process.env.EXPO_PUBLIC_CENTRAL_API_URL ?? 'http://10.0.2.2:5000',
+  centralUrl: (process.env.EXPO_PUBLIC_CENTRAL_API_URL ?? '').replace(/\/+$/, ''),
   phcApiKey: process.env.EXPO_PUBLIC_PHC_API_KEY ?? '',
   phcCode: process.env.EXPO_PUBLIC_PHC_CODE ?? 'PHC001',
-  phcName: process.env.EXPO_PUBLIC_PHC_NAME ?? 'PHC Kharadi',
+  phcName: process.env.EXPO_PUBLIC_PHC_NAME ?? 'PHC',
 };
 
 let current: AppConfig = { ...DEFAULT_CONFIG };
@@ -50,6 +53,13 @@ export function subscribeConfig(listener: (c: AppConfig) => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
+
+/**
+ * The bundled sample scan is not a patient's photograph; a real case built from
+ * it would be a fabricated capture (CLAUDE.md, design §1.22). It is offered only
+ * when this build is explicitly a demo (EXPO_PUBLIC_DEMO_TOOLS=1).
+ */
+export const DEMO_TOOLS = process.env.EXPO_PUBLIC_DEMO_TOOLS === '1';
 
 /** Tunables that are policy, not deployment. */
 export const POLICY = {

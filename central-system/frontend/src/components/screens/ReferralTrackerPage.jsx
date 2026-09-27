@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { centralApi } from '../../api/centralApiClient';
+import { LoadError } from '../shared/LoadError';
 
 const getStatusConfig = (t) => ({
   referred: { label: t('central.referral.pipeline.referred', 'REFERRED'), badge: 'badge--warning', next: 'contacted' },
-  manual_follow_up: { label: 'MANUAL FOLLOW-UP (SMS FAILED)', badge: 'badge--fail', next: 'contacted' },
+  manual_follow_up: { label: 'MANUAL FOLLOW-UP (PATIENT NOT TOLD BY SMS)', badge: 'badge--fail', next: 'contacted' },
   contacted: { label: t('central.referral.pipeline.contacted', 'CONTACTED'), badge: 'badge--neutral', next: 'attended' },
   attended: { label: t('central.referral.pipeline.attended', 'ATTENDED'), badge: 'badge--pass', next: null },
   lost: { label: t('central.referral.pipeline.lost', 'LOST TO FOLLOW-UP'), badge: 'badge--fail', next: null },
@@ -35,7 +36,37 @@ const SortHeader = React.memo(({ label, field, sortKey, sortDir, onSort, alignRi
 SortHeader.displayName = 'SortHeader';
 
 // Memoized individual table row for zero-lag updates and DOM optimization
-const ReferralRow = React.memo(({ item, onAdvance }) => {
+/**
+ * WorkerCell -- the assigned-worker field (design doc §5.3). Type an ASHA
+ * worker's name or ID and press Enter (or leave the field) to save it via
+ * PATCH; nothing is filled in for the admin.
+ */
+const WorkerCell = ({ item, onAssign, isManual }) => {
+  const [value, setValue] = useState(item.assignedWorker || '');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setValue(item.assignedWorker || ''); }, [item.assignedWorker]);
+  const dirty = value.trim() !== (item.assignedWorker || '');
+  const save = async () => {
+    if (!dirty || saving) return;
+    setSaving(true);
+    try { await onAssign(item, value.trim() === '' ? null : value.trim()); } finally { setSaving(false); }
+  };
+  return (
+    <input
+      className="input t-mono"
+      aria-label={`Assigned worker for ${item.patientReference}`}
+      value={value}
+      disabled={saving}
+      placeholder={isManual ? 'ASSIGN ASHA WORKER' : 'UNASSIGNED'}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } }}
+      style={{ height: 30, fontSize: 'var(--fs-tiny)', minWidth: 130, fontWeight: 700 }}
+    />
+  );
+};
+
+const ReferralRow = React.memo(({ item, onAdvance, onAssign }) => {
   const { t } = useTranslation();
   const statusConfig = getStatusConfig(t);
   const config = statusConfig[item.status];
@@ -47,12 +78,12 @@ const ReferralRow = React.memo(({ item, onAdvance }) => {
     <tr style={isLost ? { background: 'rgba(168, 34, 34, 0.05)' } : isManual ? { background: 'rgba(249, 115, 22, 0.06)' } : {}}>
       <td className="t-mono">
         {isLost && <span style={{ color: 'var(--c-crimson)', marginRight: '6px' }} title="Urgent Action Required">●</span>}
-        {isManual && <span style={{ color: '#F97316', marginRight: '6px' }} title="SMS Failed — Outreach Needed">⚠</span>}
+        {isManual && <span style={{ color: '#F97316', marginRight: '6px' }} title="The patient was not reached by SMS — someone must phone them">⚠</span>}
         <span style={{ fontWeight: 700 }}>{item.patientName || item.patientReference}</span>
         {item.patientName && <span style={{ fontSize: '11px', opacity: 0.5, marginLeft: '6px' }}>({item.patientReference})</span>}
         {isManual && item.failureReason && (
           <div style={{ fontSize: '10px', color: '#C2410C', fontWeight: 600, marginTop: '2px' }}>
-            📵 SMS Failed: {item.failureReason}
+            📵 SMS not delivered: {item.failureReason}
           </div>
         )}
       </td>
@@ -71,16 +102,11 @@ const ReferralRow = React.memo(({ item, onAdvance }) => {
         </span>
       </td>
       <td className="t-mono">
-        {item.assignedWorker ? (
-          <span>{item.assignedWorker}</span>
-        ) : (
-          <span style={{ color: isManual ? '#C2410C' : 'var(--c-text-muted)', fontWeight: 700 }}>
-            {isManual ? 'ASSIGN ASHA WORKER' : t('central.referral.table.unassigned', 'UNASSIGNED')}
-          </span>
-        )}
+        <WorkerCell item={item} onAssign={onAssign} isManual={isManual} />
       </td>
       <td className="t-mono u-text-right" style={{ fontSize: 'var(--fs-tiny)', color: 'var(--c-text-muted)' }}>
         {new Date(item.updatedAt).toLocaleString('en-IN', {
+          timeZone: 'Asia/Kolkata',
           day: '2-digit',
           month: 'short',
           hour: '2-digit',
@@ -89,18 +115,30 @@ const ReferralRow = React.memo(({ item, onAdvance }) => {
       </td>
       <td>
         {nextConfig ? (
-          <button
-            className="btn btn--secondary"
-            style={{
-              padding: 'var(--sp-1) var(--sp-3)',
-              fontSize: 'var(--fs-tiny)',
-              boxShadow: '2px 2px 0px var(--c-crimson)',
-            }}
-            onClick={() => onAdvance(item)}
-            title={`Advance status to ${nextConfig.label}`}
-          >
-            <span>→ {nextConfig.label}</span>
-          </button>
+          <div className="u-flex u-gap-2" style={{ alignItems: 'center' }}>
+            <button
+              className="btn btn--secondary"
+              style={{
+                padding: 'var(--sp-1) var(--sp-3)',
+                fontSize: 'var(--fs-tiny)',
+                boxShadow: '2px 2px 0px var(--c-crimson)',
+              }}
+              onClick={() => onAdvance(item)}
+              title={`Advance status to ${nextConfig.label}`}
+            >
+              <span>→ {nextConfig.label}</span>
+            </button>
+            {/* The patient could not be traced: the one terminal state the
+                forward chain never reaches. */}
+            <button
+              className="btn btn--outline"
+              style={{ padding: 'var(--sp-1) var(--sp-2)', fontSize: 'var(--fs-tiny)' }}
+              onClick={() => onAdvance(item, 'lost')}
+              title="Mark this referral as lost to follow-up"
+            >
+              <span>LOST</span>
+            </button>
+          </div>
         ) : (
           <span className="t-label" style={{ color: isLost ? 'var(--c-crimson)' : 'var(--c-text-muted)', fontWeight: isLost ? 700 : 500 }}>
             {isLost ? t('central.referral.table.actionReq', 'ACTION REQ.') : t('central.referral.table.final', 'FINAL')}
@@ -117,6 +155,9 @@ export const ReferralTrackerPage = () => {
   const statusConfig = getStatusConfig(t);
   const [referrals, setReferrals] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [updateError, setUpdateError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Multi-Filter States (Search, PHC, Grade, Status)
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,24 +169,52 @@ export const ReferralTrackerPage = () => {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'none' });
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
     centralApi.getReferrals().then(data => {
+      if (cancelled) return;
       setReferrals(data);
       setLoading(false);
+    }).catch(err => {
+      if (cancelled) return;
+      setLoadError(err);
+      setLoading(false);
     });
-  }, []);
+    return () => { cancelled = true; };
+  }, [reloadKey]);
 
-  const handleAdvance = useCallback(async (referral) => {
-    const nextStatus = statusConfig[referral.status]?.next;
+  const handleAdvance = useCallback(async (referral, target) => {
+    // `target` lets the tracker mark a referral 'lost' (it has no "next" step).
+    const nextStatus = target || statusConfig[referral.status]?.next;
     if (!nextStatus) return;
 
-    // Instantly update local state optimistically
-    const updated = await centralApi.updateReferral(referral.referralId, {
-      status: nextStatus,
-      assignedWorker: referral.assignedWorker || 'ASHA-112',
-    });
+    // Local state changes only once the server has accepted the update.
+    setUpdateError(null);
+    let updated;
+    try {
+      // Status only. The assigned worker is left exactly as it is: this used to
+      // send 'ASHA-112' for any unassigned referral, assigning a worker nobody
+      // had chosen.
+      updated = await centralApi.updateReferral(referral.referralId, { status: nextStatus });
+    } catch (err) {
+      setUpdateError({ referralId: referral.referralId, err });
+      return;
+    }
     setReferrals(prev =>
       prev.map(r => (r.referralId === referral.referralId ? { ...r, ...updated } : r))
     );
+  }, []);
+
+  const handleAssign = useCallback(async (referral, worker) => {
+    setUpdateError(null);
+    try {
+      const updated = await centralApi.updateReferral(referral.referralId, { assignedWorker: worker });
+      setReferrals(prev =>
+        prev.map(r => (r.referralId === referral.referralId ? { ...r, ...updated } : r)));
+    } catch (err) {
+      setUpdateError({ referralId: referral.referralId, err });
+    }
   }, []);
 
   const handleSort = useCallback((field) => {
@@ -254,8 +323,19 @@ export const ReferralTrackerPage = () => {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="section">
+        <LoadError error={loadError} what="referrals" onRetry={() => setReloadKey(k => k + 1)} />
+      </div>
+    );
+  }
+
   return (
     <div className="section">
+      {updateError && (
+        <LoadError error={updateError.err} title={`REFERRAL ${updateError.referralId} WAS NOT UPDATED`} compact />
+      )}
       <div className="u-flex u-items-center u-justify-between u-mb-6">
         <div>
           <p className="section__subtitle">{t('central.referral.subtitle', 'DISTRICT WORKER')}</p>
@@ -353,14 +433,14 @@ export const ReferralTrackerPage = () => {
             >
               <option value="all">{t('central.referral.search.allStatuses', 'ALL STATUSES')}</option>
               <option value="referred">{t('central.referral.pipeline.referred', 'REFERRED')}</option>
-              <option value="manual_follow_up">⚠ MANUAL FOLLOW-UP (SMS FAILED)</option>
+              <option value="manual_follow_up">⚠ MANUAL FOLLOW-UP (PATIENT NOT TOLD BY SMS)</option>
               <option value="contacted">{t('central.referral.pipeline.contacted', 'CONTACTED')}</option>
               <option value="attended">{t('central.referral.pipeline.attended', 'ATTENDED')}</option>
               <option value="lost">{t('central.referral.pipeline.lost', 'LOST TO FOLLOW-UP')}</option>
             </select>
           </div>
 
-          {/* Urgent Chip: Manual Follow-up (SMS Failed) */}
+          {/* Urgent Chip: Manual Follow-up (patient not told by SMS) */}
           <button
             className={`badge ${filter === 'manual_follow_up' ? 'badge--fail' : 'badge--neutral'}`}
             style={{
@@ -378,7 +458,7 @@ export const ReferralTrackerPage = () => {
             onClick={() => setFilter(filter === 'manual_follow_up' ? 'all' : 'manual_follow_up')}
             title="Filter directly to patients where SMS delivery failed and manual outreach is needed"
           >
-            📵 SMS FAILED ({statusCounts.manual_follow_up || 0})
+            📵 NEEDS A PHONE CALL ({statusCounts.manual_follow_up || 0})
           </button>
 
           {/* Urgent Chip: Lost to Follow-up */}
@@ -480,6 +560,7 @@ export const ReferralTrackerPage = () => {
                   key={ref.referralId}
                   item={ref}
                   onAdvance={handleAdvance}
+                  onAssign={handleAssign}
                 />
               ))
             )}

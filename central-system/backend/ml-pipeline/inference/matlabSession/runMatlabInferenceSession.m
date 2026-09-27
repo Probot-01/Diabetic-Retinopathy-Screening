@@ -2,7 +2,9 @@ function runMatlabInferenceSession()
 % RUNMATLABINFERENCESESSION  Persistent MATLAB inference server (Part 2 of
 % the MATLAB-backend latency fix -- see README.md in this folder).
 %
-% Loads all 5 project networks once, then polls a request directory for
+% Loads the networks its configured backends need (see the load block
+% below: the classifier when INFERENCE_BACKEND=matlab, M2-M4 when
+% SEG_INFERENCE_BACKEND=matlab), then polls a request directory for
 % work: each request names a Branch A tensor .mat (written by
 % preprocessBranchATensor.py) plus an optional Grad-CAM output path; each
 % response is the same JSON branchAInferMatlab.m always produced, written
@@ -33,10 +35,7 @@ function runMatlabInferenceSession()
 % It does not preprocess images -- that still happens in a fresh Python
 % process per call (preprocessBranchATensor.py), unchanged by this file.
 % Only the MATLAB half of the round trip (network load + predict +
-% calibration + Grad-CAM) becomes persistent here. Segmentation (M2-M5) is
-% loaded into memory below per the spec this was built against, but nothing
-% in this session currently SERVES segmentation requests -- the
-% INFERENCE_BACKEND=matlab switch is Branch A/classifier only today.
+% calibration + Grad-CAM) becomes persistent here.
 %
 % It DOES serve three other request types, none of which need a network:
 % segmentation forward passes (backend plan §S), the clinical-rationale PDF
@@ -75,18 +74,34 @@ addpath(fullfile(mlRoot, 'models'));
 if ~ensureOnnxSupportOnPath()
     logMsg(logFile, 'WARNING: ONNX converter support package not available');
 end
-logMsg(logFile, 'session starting -- loading all 5 networks');
+% ── Load ONLY what the configured backends will ask this session for ──────
+% Same env, same defaults as gradingOrchestrator.js / segInfer.py (the
+% supervisor launches this session with the backend's environment):
+%   INFERENCE_BACKEND=matlab     -> the classifier, which branchAInferMatlab.m
+%                                   loads itself (warm-up below). The session
+%                                   no longer loads its own branchA_v1 copy --
+%                                   nothing ever served from it.
+%   SEG_INFERENCE_BACKEND=matlab -> the SEG_SERVED nets (M2, M3, M4). M5's old
+%                                   red_lesion_unet_v1 is no longer loaded: it
+%                                   is never served (M5 v2 runs in PyTorch).
+% This changes what is resident, never which engine runs anything: a request
+% for a model that is not loaded fails loudly (handleRequest), it is not
+% quietly served some other way. `nets` staying a local variable of this
+% function, alive for the whole loop below, is what keeps them resident.
+classifierBackend = lower(strtrim(getenv('INFERENCE_BACKEND')));
+if isempty(classifierBackend), classifierBackend = 'matlab'; end
+segBackend = lower(strtrim(getenv('SEG_INFERENCE_BACKEND')));
+if isempty(segBackend), segBackend = 'matlab'; end
+netFiles = {};
+if strcmp(segBackend, 'matlab'), netFiles = SEG_SERVED(); end
+plusClassifier = '';
+if strcmp(classifierBackend, 'matlab'), plusClassifier = ' + the classifier'; end
+logMsg(logFile, sprintf(['session starting -- INFERENCE_BACKEND=%s, ' ...
+    'SEG_INFERENCE_BACKEND=%s; loading %d segmentation network(s)%s'], ...
+    classifierBackend, segBackend, numel(netFiles), plusClassifier));
 
-% ── Load all 5 networks once, keep them referenced for the session's life ──
-% Only branchA_v1 is actually served by handleRequest below today; the other
-% four are loaded per spec so a future widening of INFERENCE_BACKEND=matlab
-% to segmentation does not need a session restart. `nets` staying a local
-% variable in this function's scope, alive for the whole while-loop below,
-% is what keeps them resident -- there is no separate registry to manage.
 modelsDir = fullfile(mlRoot, 'models');
-netFiles = {'branchA_v1', 'vessel_unet_v1', 'localization_v1', ...
-            'bright_lesion_unet_v1', 'red_lesion_unet_v1'};
-nets = struct(); %#ok<NASGU> -- intentionally kept alive, not read again below
+nets = struct();
 for i = 1:numel(netFiles)
     name = netFiles{i};
     loaded = load(fullfile(modelsDir, [name '.mat']), 'net');
@@ -94,29 +109,32 @@ for i = 1:numel(netFiles)
     logMsg(logFile, sprintf('  loaded %s', name));
 end
 
-% branchAInferMatlab.m keeps its OWN persistent net (separate from `nets`
-% above -- branchA_v1 briefly exists in two places at startup; harmless,
-% just not deduplicated). Call it once now on a dummy tensor so the first
-% REAL request doesn't pay that load cost.
+% branchAInferMatlab.m keeps its OWN persistent net. Call it once now on a
+% dummy tensor so the first REAL request doesn't pay that load cost -- only
+% when the classifier actually runs here.
 % SIZE FOLLOWS THE SELECTED MODEL, it is not 384. branchA_v1 is a 384 px
 % network and the v2 family is 512, so a hardcoded 384 tensor fails the
 % warm-up outright once BRANCH_A_MODEL_VERSION is a v2 tag -- non-fatal
 % (the catch below logs and continues) but it silently costs the first real
 % request the load it was meant to pay for. Asked of the same registry
 % branchAInferMatlab.m uses, so the two cannot disagree.
-warmupTensor = fullfile(tempdir, 'matlab_session_warmup.mat');
-warmupSize = branchAInputSize();
-x = zeros(warmupSize, warmupSize, 3, 1, 'single'); %#ok<NASGU>
-display = zeros(warmupSize, warmupSize, 3, 'uint8'); %#ok<NASGU>
-save(warmupTensor, 'x', 'display');
-logMsg(logFile, sprintf('  warmup tensor %dx%d', warmupSize, warmupSize));
-try
-    branchAInferMatlab(warmupTensor, '');
-    logMsg(logFile, '  warmup inference call OK');
-catch ME
-    logMsg(logFile, sprintf('  WARNING: warmup call failed: %s', ME.message));
+if strcmp(classifierBackend, 'matlab')
+    warmupTensor = fullfile(tempdir, 'matlab_session_warmup.mat');
+    warmupSize = branchAInputSize();
+    x = zeros(warmupSize, warmupSize, 3, 1, 'single'); %#ok<NASGU>
+    display = zeros(warmupSize, warmupSize, 3, 'uint8'); %#ok<NASGU>
+    save(warmupTensor, 'x', 'display');
+    logMsg(logFile, sprintf('  warmup tensor %dx%d', warmupSize, warmupSize));
+    try
+        branchAInferMatlab(warmupTensor, '');
+        logMsg(logFile, '  warmup inference call OK');
+    catch ME
+        logMsg(logFile, sprintf('  WARNING: warmup call failed: %s', ME.message));
+    end
+    delete(warmupTensor);
+else
+    logMsg(logFile, '  classifier not loaded (INFERENCE_BACKEND is not matlab)');
 end
-delete(warmupTensor);
 
 logMsg(logFile, 'session ready, polling for requests');
 
@@ -181,6 +199,11 @@ try
             error('runMatlabInferenceSession:model', ...
                   'Model "%s" is not served by this session (served: %s).', ...
                   name, strjoin(SEG_SERVED, ', '));
+        end
+        if ~isfield(nets, name)
+            error('runMatlabInferenceSession:notLoaded', ...
+                  ['Model "%s" is not loaded: this session was started with ' ...
+                   'SEG_INFERENCE_BACKEND other than matlab.'], name);
         end
         td = load(req.tensorPath, 'x');
         y = predict(nets.(name), dlarray(single(td.x), 'SSCB'));

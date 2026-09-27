@@ -1,6 +1,8 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { qualityReasonMessages } from '../../api/mockData';
+import { USE_MOCK_DATA } from '../../config';
+import { engineLabel } from '../../api/captureOptions';
 
 export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
   const { t } = useTranslation();
@@ -8,13 +10,11 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
   const isRetake     = result.qualityStatus === 'retake';
   const isBorderline = result.qualityStatus === 'borderline';
 
-  const qualityScore = result.qualityScore != null ? Math.round(result.qualityScore * 100) : 91;
-  const metrics      = result.metrics || result.imageQuality?.metrics || {
-    focusScore: 0.94,
-    illuminationScore: 0.88,
-    contrastScore: 0.86,
-    retinalCoverageScore: 0.98,
-  };
+  // Only what the gate actually reported. POST /captures returns a status and
+  // a reason (api-contracts.md), not a score or per-metric numbers; when those
+  // are absent their cards are left out rather than filled with stand-ins.
+  const qualityScore = result.qualityScore != null ? Math.round(result.qualityScore * 100) : null;
+  const metrics      = result.metrics || result.imageQuality?.metrics || null;
 
   // Status configuration matching reference image 2
   const statusCfg = isPass
@@ -38,33 +38,16 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
         type: 'borderline',
       };
 
-  // Metric definitions matching reference layout
-  const metricList = [
-    {
-      id: 'focus',
-      label: 'FOCUS',
-      value: metrics.focusScore ?? 0.94,
-      isLowest: false,
-    },
-    {
-      id: 'illumination',
-      label: 'ILLUMINATION',
-      value: metrics.illuminationScore ?? 0.88,
-      isLowest: false,
-    },
-    {
-      id: 'contrast',
-      label: 'CONTRAST',
-      value: metrics.contrastScore ?? 0.86,
-      isLowest: true, // as seen in reference image 2: CONTRAST = lowest
-    },
-    {
-      id: 'coverage',
-      label: 'COVERAGE',
-      value: metrics.retinalCoverageScore ?? 0.98,
-      isLowest: false,
-    },
-  ];
+  // Metric definitions matching reference layout. Only metrics with a real
+  // value are shown, and "lowest" is computed from them, not fixed.
+  const metricList = metrics ? [
+    { id: 'focus',        label: 'FOCUS',        value: metrics.focusScore },
+    { id: 'illumination', label: 'ILLUMINATION', value: metrics.illuminationScore },
+    { id: 'contrast',     label: 'CONTRAST',     value: metrics.contrastScore },
+    { id: 'coverage',     label: 'COVERAGE',     value: metrics.retinalCoverageScore },
+  ].filter(m => typeof m.value === 'number') : [];
+  const lowestValue = metricList.length > 1 ? Math.min(...metricList.map(m => m.value)) : null;
+  metricList.forEach(m => { m.isLowest = m.value === lowestValue; });
 
   return (
     <div className="qr-panel">
@@ -80,7 +63,43 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
         </div>
       </div>
 
-      {/* ── 2. Quality Score Card ── */}
+      {/* ── Which engine produced this verdict (standing rule: no silent engine) ── */}
+      {(() => {
+        const engine = result.qualityGateEngine;
+        const isFallback = !!engine && engine.fallback;
+        return (
+          <div
+            className="qrp-card"
+            data-testid="quality-gate-engine"
+            style={{
+              display: 'flex', flexDirection: 'column', gap: 4,
+              border: isFallback ? '2px solid var(--c-warning, #D4860A)' : undefined,
+            }}
+          >
+            <div className="qrp-card__header-row">
+              <span className="qrp-label">QUALITY GATE ENGINE</span>
+              <span className="qrp-metric-num" style={{ fontFamily: 'var(--font-mono, monospace)' }}>
+                {USE_MOCK_DATA ? 'SIMULATED' : (engineLabel(engine) || 'NOT RECORDED')}
+              </span>
+            </div>
+            <div style={{ fontSize: 11, opacity: 0.75, fontFamily: 'var(--font-mono, monospace)' }}>
+              {USE_MOCK_DATA
+                ? 'DEMO DATA — no quality gate ran.'
+                : engine
+                  ? (engine.detail || '')
+                  : 'This capture carries no record of which engine checked it.'}
+            </div>
+            {isFallback && (
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-warning, #D4860A)' }}>
+                ⚠ FALLBACK ENGINE — not the reference MATLAB gate. Treat this verdict with care.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── 2. Quality Score Card (only when the gate reported one) ── */}
+      {qualityScore != null && (
       <div className="qrp-card qrp-score-card">
         <div className="qrp-card__header-row">
           <span className="qrp-label">QUALITY SCORE</span>
@@ -93,9 +112,10 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
           />
         </div>
       </div>
+      )}
 
-      {/* ── 3. 2x2 Metrics Grid ── */}
-      <div className="qrp-metrics-grid">
+      {/* ── 3. 2x2 Metrics Grid (only the metrics the gate reported) ── */}
+      {metricList.length > 0 && <div className="qrp-metrics-grid">
         {metricList.map(m => {
           const pct = Math.round(m.value * 100);
           return (
@@ -118,7 +138,7 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
             </div>
           );
         })}
-      </div>
+      </div>}
 
       {/* Issues if any */}
       {result.issues && result.issues.length > 0 && !isPass && (
@@ -163,14 +183,21 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
           >
             <span style={{ marginRight: '6px' }}>↺</span> RETAKE IMAGE (RESOLVE DEFECT)
           </button>
-          <button
-            type="button"
-            className="btn btn--outline"
-            onClick={onAccept}
-            style={{ opacity: 0.5, fontSize: '10px', padding: '6px', borderStyle: 'dashed' }}
-          >
-            OVERRIDE QUALITY GATE & PROCEED ANYWAY
-          </button>
+          {/* Demo only. In live mode a 'retake' capture is never queued for upload
+              (only pass/borderline are), so "proceeding anyway" would collect the
+              questionnaires for an image that can never reach central -- a silent
+              dead end. The technician retakes; the ungradable path (§10.2) is not
+              built on the desktop yet. */}
+          {USE_MOCK_DATA && (
+            <button
+              type="button"
+              className="btn btn--outline"
+              onClick={onAccept}
+              style={{ opacity: 0.5, fontSize: '10px', padding: '6px', borderStyle: 'dashed' }}
+            >
+              OVERRIDE QUALITY GATE & PROCEED ANYWAY
+            </button>
+          )}
         </div>
       ) : (
         <div className="qrp-actions">

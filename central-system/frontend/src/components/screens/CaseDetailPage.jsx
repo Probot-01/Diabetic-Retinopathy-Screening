@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { centralApi } from '../../api/centralApiClient';
+import { CENTRAL_API_BASE } from '../../config';
 import { drGradeLabels } from '../../api/mockData';
 import { GradCamOverlay } from './GradCamOverlay';
 import { LesionEvidencePanel } from './LesionEvidencePanel';
 import { BranchComparisonPanel } from './BranchComparisonPanel';
-import { DecisionControls } from './DecisionControls';
+import { ProvenancePanel } from './ProvenancePanel';
+import { DecisionControls, describeOutcome } from './DecisionControls';
 import { CaseHistoryTimeline } from './CaseHistoryTimeline';
 import { InfoBanner } from '../shared/InfoBanner';
+import { LoadError } from '../shared/LoadError';
 
 const MetricBar = ({ label, value, maxVal = 1, color = 'var(--c-crimson)' }) => {
   const pct = Math.round((value / maxVal) * 100);
@@ -17,7 +20,7 @@ const MetricBar = ({ label, value, maxVal = 1, color = 'var(--c-crimson)' }) => 
       <div className="u-flex u-justify-between u-items-center" style={{ marginBottom: 'var(--sp-1)' }}>
         <span className="t-label">{label}</span>
         <span className="t-mono" style={{ fontWeight: 700, fontSize: 'var(--fs-small)' }}>
-          {typeof value === 'number' ? `${pct}%` : 'N/A'}
+          {typeof value === 'number' ? `${pct}%` : 'NOT COMPUTED'}
         </span>
       </div>
       <div className="bar">
@@ -43,44 +46,117 @@ const SeverityBadge = ({ grade }) => {
   return <span className={cls}>SEVERITY: {label}</span>;
 };
 
+/**
+ * ReportButton -- the downloadable clinical-rationale PDF (design doc §5.2,
+ * §6.9). GET /cases/:id/report renders it on demand (up to ~40 s the first
+ * time), then this opens the file the server hands back. A failure is shown
+ * as a failure; there is no substitute document.
+ */
+const ReportButton = ({ caseId }) => {
+  const [state, setState] = useState({ busy: false, error: null, url: null });
+  const generate = async () => {
+    setState({ busy: true, error: null, url: null });
+    try {
+      const r = await centralApi.getCaseReport(caseId);
+      setState({ busy: false, error: null, url: r.reportUrl });
+      window.open(`${CENTRAL_API_BASE}${r.reportUrl}`, '_blank', 'noopener');
+    } catch (err) {
+      setState({ busy: false, error: err, url: null });
+    }
+  };
+  return (
+    <div className="u-flex u-items-center u-gap-3" style={{ flexWrap: 'wrap' }}>
+      <button className="btn btn--outline" onClick={generate} disabled={state.busy}
+        style={{ padding: 'var(--sp-1) var(--sp-3)', fontSize: 'var(--fs-tiny)' }}>
+        <span>{state.busy ? 'GENERATING REPORT…' : '⬇ EVIDENCE REPORT (PDF)'}</span>
+      </button>
+      {state.url && (
+        <a className="t-mono" style={{ fontSize: 'var(--fs-tiny)' }} href={`${CENTRAL_API_BASE}${state.url}`}
+          target="_blank" rel="noopener noreferrer">OPEN AGAIN</a>
+      )}
+      {state.error && (
+        <span role="alert" className="t-mono" style={{ fontSize: 'var(--fs-tiny)', color: 'var(--c-crimson)' }}>
+          REPORT FAILED: {state.error.message}{state.error.code ? ` (${state.error.code})` : ''}
+        </span>
+      )}
+    </div>
+  );
+};
+
 export const CaseDetailPage = () => {
   const { caseId } = useParams();
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const outlet = useOutletContext() || {};
+  const reviewerName = outlet.userProfile?.fullName || outlet.userProfile?.email || null;
   const [caseData, setCaseData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showGradCam, setShowGradCam] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [reviewSubmitted, setReviewSubmitted] = useState(false);
-  const [claimedBy, setClaimedBy] = useState(null);
+  const [reviewOutcome, setReviewOutcome] = useState(null);
+  const [claimedBy, setClaimedBy] = useState(null);   // name of ANOTHER reviewer holding it
+  const [claimedByMe, setClaimedByMe] = useState(false);
   const [priorReview, setPriorReview] = useState(null);
+  // Failures, kept apart: without the case there is nothing to show; a failed
+  // claim or review-history call is shown next to the case, not hidden.
+  const [loadError, setLoadError] = useState(null);
+  const [sideErrors, setSideErrors] = useState([]);
+  const [reloadKey, setReloadKey] = useState(0);
   const startTimeRef = useRef(Date.now());
 
   useEffect(() => {
+    let cancelled = false;
     startTimeRef.current = Date.now();
-    
+    setLoading(true);
+    setLoadError(null);
+    setSideErrors([]);
+    const noteSideError = (what) => (err) => {
+      if (!cancelled) setSideErrors(prev => [...prev, { what, err }]);
+    };
+
+    setClaimedBy(null);
+    setClaimedByMe(false);
     Promise.all([
       centralApi.getCaseDetail(caseId),
-      centralApi.claimCase(caseId).catch(err => {
-        if (err.status === 409) setClaimedBy(err.claimedBy || 'Another Reviewer');
+      centralApi.claimCase(caseId).then(() => {
+        if (!cancelled) setClaimedByMe(true);
+      }).catch(err => {
+        if (cancelled) return;
+        // Only case_claimed means "someone else holds it". Any other 409
+        // (case_not_graded) or failure is a different problem and is shown as
+        // one -- not passed off as a claim by another reviewer.
+        if (err.code === 'case_claimed') {
+          setClaimedBy(err.details?.claimedBy?.name || 'another reviewer');
+        } else {
+          noteSideError('COULD NOT CLAIM THIS CASE — another reviewer may open it too')(err);
+        }
       }),
       centralApi.getReviews(caseId).then(reviews => {
         if (reviews && reviews.length > 0) setPriorReview(reviews[0]);
-      })
+      }).catch(noteSideError('COULD NOT LOAD THE REVIEW HISTORY — a prior review may exist')),
     ]).then(([data]) => {
+      if (cancelled) return;
       setCaseData(data);
       setLoading(false);
+    }).catch(err => {
+      if (cancelled) return;
+      setLoadError(err);
+      setLoading(false);
     });
-  }, [caseId]);
+    return () => { cancelled = true; };
+  }, [caseId, reloadKey]);
 
   const handleReviewSubmit = async (reviewData) => {
     const durationSec = Math.round((Date.now() - startTimeRef.current) / 1000);
-    await centralApi.submitReview(caseId, {
+    const result = await centralApi.submitReview(caseId, {
       ...reviewData,
       reviewDurationSeconds: durationSec,
     });
+    setReviewOutcome(result);
     setReviewSubmitted(true);
-    setTimeout(() => navigate('/ophth/queue'), 1500);
+    // Long enough to read the referral / SMS outcome the server reported.
+    setTimeout(() => navigate('/ophth/queue'), 6000);
   };
 
   if (loading) {
@@ -95,6 +171,18 @@ export const CaseDetailPage = () => {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="section">
+        <LoadError error={loadError} what={`case ${String(caseId).slice(0, 8).toUpperCase()}`}
+          onRetry={() => setReloadKey(k => k + 1)} />
+        <button className="btn btn--outline" onClick={() => navigate('/ophth/queue')}>
+          ← {t('central.caseDetail.nav.queue', 'CASES')}
+        </button>
+      </div>
+    );
+  }
+
   if (!caseData) {
     return <div className="section"><p className="t-mono">{t('central.caseDetail.notFound', 'Case not found.')}</p></div>;
   }
@@ -104,6 +192,9 @@ export const CaseDetailPage = () => {
 
   return (
     <div className={`section case-detail ${reviewSubmitted ? 'case-detail--submitted' : ''}`}>
+      {sideErrors.map(({ what, err }) => (
+        <LoadError key={what} error={err} title={what} compact />
+      ))}
       {/* Top Bar — Case ID + Tier + Mismatch Warning */}
       <div className={`case-detail__top-bar ${isBranchMismatch ? 'case-detail__top-bar--mismatch' : ''}`}>
         <div className="u-flex u-items-center u-gap-4">
@@ -112,17 +203,57 @@ export const CaseDetailPage = () => {
           </button>
           <div>
             <span className="t-mono" style={{ fontSize: 'var(--fs-small)', opacity: 0.5 }}>{t('central.caseDetail.caseLabel', 'CASE')}</span>
-            <span className="t-mono" style={{ fontWeight: 700, marginLeft: 'var(--sp-2)' }}>
-              #{caseId.slice(0, 8).toUpperCase()}
-            </span>
-            <span className="t-mono" style={{ fontWeight: 700, marginLeft: 'var(--sp-3)', color: 'var(--c-crimson)' }}>
-              • {c.patientName ? `${c.patientName.toUpperCase()}` : c.patientReference} {c.patientAge ? `(${c.patientAge}Y)` : ''}
+            {/* The patient reference (PT-1234) is the readable case identifier the
+                queue and referral screens also show; the raw case UUID stays in the tooltip. */}
+            <span className="t-mono" title={`Case ID ${caseId}`} style={{ fontWeight: 700, marginLeft: 'var(--sp-2)', color: 'var(--c-crimson)' }}>
+              {c.patientReference || caseId}
             </span>
           </div>
         </div>
 
         <div className="u-flex u-items-center u-gap-4">
+          {claimedByMe && !claimedBy && !reviewSubmitted && (
+            <span className="badge badge--neutral" data-testid="claimed-by-me">● CLAIMED BY YOU</span>
+          )}
+          {claimedBy && (
+            <span className="badge badge--fail" data-testid="claimed-by-other">● CLAIMED BY {String(claimedBy).toUpperCase()}</span>
+          )}
           <SeverityBadge grade={c.drGradeCnn} />
+
+          {/* WHY this case is in its tier, not just which tier.
+              Five different situations produce a "B" -- the model being
+              unsure, an unreliable fovea, an eye-laterality mismatch, a
+              camera on probation, or a camera nobody has validated -- and
+              they ask different things of the reviewer. The backend has
+              recorded the reason since migration 0015; showing only the
+              letter threw that away at the last step. */}
+          {c.conformalTier && (
+            <span
+              className="badge badge--neutral"
+              title={c.tierReason
+                || 'Reason not recorded: this case was graded before the reason was stored.'}
+              data-testid="tier-badge"
+            >
+              TIER {String(c.conformalTier).toUpperCase()}
+            </span>
+          )}
+
+          {/* The fovea gate. When it fires, the quadrant-based severe-NPDR
+              criteria (a) and (b) were SKIPPED for this eye, so the grade may
+              be an under-call. That is said inside the evidence prose; a
+              reviewer scanning the header should not have to read for it. */}
+          {c.foveaUnreliable === true && (
+            <span
+              className="badge badge--fail"
+              title={'The fovea could not be located reliably, so lesion quadrants '
+                + 'cannot be trusted. The quadrant-based severe-NPDR criteria were '
+                + 'not applied and this grade may be an under-call.'}
+              data-testid="fovea-unreliable-badge"
+            >
+              ⚠ FOVEA UNRELIABLE
+            </span>
+          )}
+
           {isBranchMismatch && (
             <span className="badge badge--fail case-detail__mismatch-badge">
               {t('central.caseDetail.mismatchWarning', '⚠ BRANCH MISMATCH — REVIEW REQUIRED')}
@@ -149,7 +280,8 @@ export const CaseDetailPage = () => {
           <div className="case-detail__image-panel panel--dark">
             <div className="case-detail__image-header u-flex u-justify-between u-items-center">
               <span className="t-label" style={{ color: 'var(--c-crimson)' }}>
-                {t('central.caseDetail.image.fundus', 'FUNDUS IMAGE')} — {c.patientName ? `${c.patientName} (${c.patientReference})` : c.patientReference}
+                {t('central.caseDetail.image.fundus', 'FUNDUS IMAGE')} — {c.patientReference}
+                {c.eyeLaterality ? ` · ${c.eyeLaterality.toUpperCase()} EYE` : ''}
               </span>
               <button
                 className={`btn ${showGradCam ? 'btn--danger' : 'btn--outline'}`}
@@ -160,6 +292,11 @@ export const CaseDetailPage = () => {
               </button>
             </div>
             <GradCamOverlay showOverlay={showGradCam} caseData={c} />
+          </div>
+
+          {/* Downloadable clinical-rationale report (PDF) */}
+          <div style={{ padding: 'var(--sp-3) var(--sp-6)', border: 'var(--border)' }}>
+            <ReportButton caseId={caseId} />
           </div>
 
           {/* Metric Bars */}
@@ -194,16 +331,19 @@ export const CaseDetailPage = () => {
           <div className="case-detail__context" style={{ border: 'var(--border)', padding: 'var(--sp-6)' }}>
             <h3 className="t-h3 u-mb-4">{t('central.caseDetail.context.title', 'PATIENT / CAPTURE CONTEXT')}</h3>
             <div className="grid--2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+              {/* The API deliberately carries a display-safe reference, not the
+                  patient's name or age (api-contracts.md, patientReference):
+                  nothing is invented to fill those tiles. */}
               <div style={{ padding: 'var(--sp-3)', borderRight: 'var(--border)', borderBottom: 'var(--border)' }}>
-                <span className="t-label" style={{ opacity: 0.5 }}>PATIENT NAME</span>
+                <span className="t-label" style={{ opacity: 0.5 }}>PATIENT REFERENCE</span>
                 <p className="t-mono" style={{ fontWeight: 700, color: 'var(--c-crimson)' }}>
-                  {c.patientName || 'Krrish'}
+                  {c.patientReference || 'N/A'}
                 </p>
               </div>
               <div style={{ padding: 'var(--sp-3)', borderBottom: 'var(--border)' }}>
-                <span className="t-label" style={{ opacity: 0.5 }}>PATIENT AGE</span>
-                <p className="t-mono" style={{ fontWeight: 700 }}>
-                  {c.patientAge ? `${c.patientAge} YEARS` : '20 YEARS'}
+                <span className="t-label" style={{ opacity: 0.5 }}>EYE</span>
+                <p className="t-mono" style={{ fontWeight: 700, textTransform: 'uppercase' }}>
+                  {c.eyeLaterality || 'N/A'}
                 </p>
               </div>
               <div style={{ padding: 'var(--sp-3)', borderRight: 'var(--border)' }}>
@@ -251,6 +391,13 @@ export const CaseDetailPage = () => {
               </div>
             </div>
           </div>
+
+          {/* WHICH ENGINE produced each output, the classifier build behind the
+              grade, and what the image file says about itself. The quality-gate
+              engine used to sit as a lone tile in the context grid above; it is
+              one of seven engine entries the backend records, so it now lives
+              with the other six instead of standing in for them. */}
+          <ProvenancePanel caseData={c} />
         </div>
       </div>
 
@@ -262,6 +409,8 @@ export const CaseDetailPage = () => {
           submitted={reviewSubmitted}
           claimedBy={claimedBy}
           priorReview={priorReview}
+          reviewerName={reviewerName}
+          outcome={reviewOutcome}
         />
 
         <div style={{ marginTop: 'var(--sp-4)' }}>
@@ -282,6 +431,9 @@ export const CaseDetailPage = () => {
           <div className="case-detail__success-content">
             <span style={{ fontSize: '4rem' }}>✓</span>
             <h2 className="t-h2">{t('central.caseDetail.success.title', 'REVIEW SUBMITTED')}</h2>
+            {describeOutcome(reviewOutcome).map((line) => (
+              <p key={line} className="t-mono" style={{ maxWidth: 520 }}>{line}</p>
+            ))}
             <p className="t-mono" style={{ opacity: 0.6 }}>{t('central.caseDetail.success.subtitle', 'REDIRECTING TO CASES...')}</p>
           </div>
         </div>

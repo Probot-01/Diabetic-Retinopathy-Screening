@@ -40,7 +40,7 @@ const DOWN  = process.argv.includes('--down');
 async function run() {
   const target = process.env.DATABASE_URL
     ? process.env.DATABASE_URL.replace(/:[^:@/]*@/, ':****@')   // mask password
-    : `${process.env.PGHOST || 'localhost'}:${process.env.PGPORT || 5432}` +
+    : `${process.env.PGHOST || 'localhost'}:${process.env.PGPORT || 5433}` +
       `/${process.env.PGDATABASE || 'dr_screening_central'}`;
 
   console.log(`[setupCentralDb] Target: ${target}`);

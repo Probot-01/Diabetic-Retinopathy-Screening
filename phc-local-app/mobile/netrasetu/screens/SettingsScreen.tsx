@@ -81,7 +81,7 @@ export default function SettingsScreen() {
 
         <SectionHeader badge="03" title="DEVICE" />
         <View style={s.kv}><Text style={s.k}>FREE STORAGE</Text><Text style={s.v}>{formatBytes(Number.isFinite(storage.availableBytes) ? storage.availableBytes : null)}</Text></View>
-        <View style={s.kv}><Text style={s.k}>DEFAULT SERVER</Text><Text style={s.v}>{DEFAULT_CONFIG.centralUrl}</Text></View>
+        <View style={s.kv}><Text style={s.k}>DEFAULT SERVER</Text><Text style={s.v}>{DEFAULT_CONFIG.centralUrl || '(not set in build)'}</Text></View>
 
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 24 }}>
           <Btn variant="outline" label="RESET TO DEFAULTS" onPress={() => setDraft({ ...DEFAULT_CONFIG })} style={{ flex: 1 }} />

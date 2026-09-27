@@ -135,6 +135,15 @@ const MIGRATIONS: string[] = [
   INSERT INTO change_log (tbl, pk, origin, at) SELECT 'capture_metadata_responses', response_id, NULL, recorded_at FROM capture_metadata_responses;
   INSERT INTO change_log (tbl, pk, origin, at) SELECT 'sync_queue', capture_id, NULL, enqueued_at FROM sync_queue;
   `,
+  // v3 (2026-09-27): which engine ran the quality gate (engine provenance).
+  // Captures taken on this phone before this column were gated by the on-device
+  // port, which is the only gate this app has: origin_device is NULL exactly for
+  // those rows (rows received from the PC carry the PC's device id).
+  `
+  ALTER TABLE captures ADD COLUMN quality_engine TEXT;
+  UPDATE captures SET quality_engine = '{"engine":"js-device","fallback":false,"detail":"qualityGate.ts, the TypeScript port of qualityGateMain.m, run on the phone"}'
+    WHERE origin_device IS NULL AND quality_engine IS NULL;
+  `,
 ];
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;

@@ -59,11 +59,13 @@ const fs         = require('fs');
 const os         = require('os');
 const pool       = require('../db/pgClient');
 const mediaPaths = require('./mediaPaths');
+const mediaCrypto = require('./mediaCrypto');
 const { fromMatlab, fromMatlabDeep } = require('./matlabInterop');
 const matlabFallback = require('./matlabFallback');
 const matlabSession  = require('./matlabSessionClient');
 const segSession     = require('./segSessionClient');
 const { cameraNotValidated: isCameraNotValidated } = require('./validatedCameras');
+const { engineEntry, normaliseEngineEntry } = require('./engineProvenance');
 
 // Task: MATLAB workaround for a dev machine with no MATLAB install (no
 // license, no disk space). When true, MATLAB genuinely failing to SPAWN
@@ -73,10 +75,12 @@ const { cameraNotValidated: isCameraNotValidated } = require('./validatedCameras
 // (the CNN grade, Python) and Phase 4 segmentation (also Python) are
 // completely unaffected either way — only the MATLAB-only stages (Branch B's
 // grading call site, the camera cross-check, lesion-attention consistency)
-// are substituted. Set MATLAB_ALLOW_FALLBACK=0 to disable this and get the
-// original hard-fail behaviour back (e.g. on a machine that has MATLAB and
-// wants a real MATLAB error to actually fail the case).
-const ALLOW_MATLAB_FALLBACK = process.env.MATLAB_ALLOW_FALLBACK !== '0';
+// are substituted.
+//
+// OFF by default (2026-09-26): a missing MATLAB fails the case loudly. Opt in
+// with MATLAB_ALLOW_FALLBACK=1, and only on a machine that genuinely has no
+// MATLAB -- standing rule: no silent engine fallback.
+const ALLOW_MATLAB_FALLBACK = process.env.MATLAB_ALLOW_FALLBACK === '1';
 
 // ── Path constants ────────────────────────────────────────────────────────────
 const ML_ROOT          = path.resolve(__dirname, '..', 'ml-pipeline');
@@ -346,9 +350,23 @@ async function runBranchAInferenceMatlab(imagePath, gradcamPath) {
  *
  * The distinction that must not blur: NULL means "Branch B did not run", and
  * FALSE means "Branch B ran and disagreed". Only the second forces Tier C.
+ *
+ * ONE EXCEPTION, which REJECTS: segInfer.py's exit code 4, "the MATLAB session
+ * failed a forward pass and the PyTorch fallback is off". That is an engine
+ * failure, not a missing second opinion -- degrading the case to classifier-
+ * only would be the silent engine fallback the standing rules forbid. It
+ * rejects with a retryable code, so the grading queue retries the case and,
+ * if MATLAB stays down, marks it 'error' where System Health shows it.
  */
+const SEG_EXIT_MATLAB_FAILED = 4;
+
+function matlabSegmentationFailed(message) {
+  return unavailable('matlab_segmentation_failed',
+    `Segmentation's MATLAB engine failed and SEG_ALLOW_PYTHON_FALLBACK is off: ${message}`);
+}
+
 function runSegInference(imagePath, outdir) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const args = [SEG_INFER, imagePath];
     if (outdir) args.push('--outdir', outdir);
     const proc = spawn(PYTHON_EXE, args, { env: process.env, timeout: TIMEOUT_MS });
@@ -358,6 +376,9 @@ function runSegInference(imagePath, outdir) {
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
 
     proc.on('close', (code) => {
+      if (code === SEG_EXIT_MATLAB_FAILED) {
+        return reject(matlabSegmentationFailed(stderr.trim().slice(0, 500)));
+      }
       if (code !== 0) {
         console.warn(`[gradingOrchestrator] segmentation exited ${code}; `
           + `Branch B unavailable. stderr: ${stderr.trim().slice(0, 300)}`);
@@ -407,6 +428,10 @@ async function runSegInferenceSession(imagePath, outdir) {
     return await segSession.call({ image: imagePath, outdir: outdir || '' },
       { timeoutMs: SEG_SESSION_TIMEOUT_MS, prefix: 'seg' });
   } catch (err) {
+    // The worker's MATLAB engine failed: not a reason to re-run the same
+    // models in a fresh process (it would ask the same session again) and
+    // never a reason to degrade silently -- see runSegInference.
+    if (err.code === 'matlab_segmentation_failed') throw matlabSegmentationFailed(err.message);
     console.warn(`[gradingOrchestrator] the segmentation worker could not handle `
       + `this image (${err.message}); falling back to a fresh segInfer.py process, `
       + 'which costs this case about 17 s of model loading');
@@ -417,9 +442,10 @@ async function runSegInferenceSession(imagePath, outdir) {
 /**
  * segment(imagePath, outdir) -- Branch B's input, from whichever path is up.
  *
- * Resolves NULL on any failure of BOTH paths, never throws: see
- * runSegInference's header for why losing Branch B must degrade a case rather
- * than fail it.
+ * Resolves NULL on any failure of BOTH paths: see runSegInference's header for
+ * why losing Branch B must degrade a case rather than fail it. The one thing
+ * that throws is a MATLAB-engine failure (matlab_segmentation_failed), for the
+ * reason given there.
  */
 async function segment(imagePath, outdir) {
   if (segSession.alive()) {
@@ -661,10 +687,30 @@ async function hasClearedCameraSiteProbation(phcId, cameraDeviceId, excludeCaseI
 /**
  * processCase(caseId)
  *
+ * Media may be encrypted at rest (mediaCrypto.js), and Python and MATLAB read
+ * the image by path, so grading runs on a decrypted temp copy that is deleted
+ * afterwards. Everything the pipeline wrote into the case's media directory
+ * (Grad-CAM, masks) is encrypted as soon as it finishes -- success or failure.
+ *
  * @param {string} caseId — UUID of the case to grade.
  * @returns {Promise<Object>} summary of what was written to the DB.
  */
 async function processCase(caseId) {
+  const { rows } = await pool.query('SELECT image_path FROM cases WHERE case_id = $1', [caseId]);
+  if (!rows.length) return gradeCase(caseId, null);   // throws "not found", as before
+  try {
+    return await mediaCrypto.withPlaintextCopy(rows[0].image_path,
+      (plainImagePath) => gradeCase(caseId, plainImagePath));
+  } finally {
+    try {
+      mediaCrypto.encryptDir(mediaPaths.caseDir(caseId));
+    } catch (err) {
+      console.error(`[gradingOrchestrator] case ${caseId}: could not encrypt pipeline outputs: ${err.message}`);
+    }
+  }
+}
+
+async function gradeCase(caseId, plainImagePath) {
   // ── Step 1: fetch case row ─────────────────────────────────────────────────
   // Joined to patients for age, which the urgency score needs and the cases
   // table does not carry. LEFT JOIN, not INNER: a case whose patient row is
@@ -678,7 +724,9 @@ async function processCase(caseId) {
     throw new Error(`processCase: case '${caseId}' not found in cases table`);
 
   const caseRow   = caseRes.rows[0];
-  const imagePath = caseRow.image_path;
+  // The readable copy from processCase; the stored path itself when the file
+  // is not encrypted.
+  const imagePath = plainImagePath || caseRow.image_path;
   if (!imagePath)
     throw new Error(`processCase: case '${caseId}' has no image_path`);
 
@@ -712,10 +760,11 @@ async function processCase(caseId) {
   // Grad-CAM is produced inside the Branch A call rather than a second spawn:
   // interpreter start and model load dominate the cost.
   //
-  // Promise.all and not allSettled: runSegInference never rejects, it resolves
-  // NULL on failure, because Branch B is the second opinion and losing it must
-  // degrade the result rather than fail the case. A Branch A failure DOES
-  // reject, and should — without it there is no grade at all.
+  // Promise.all and not allSettled: segment() resolves NULL on an ordinary
+  // failure, because Branch B is the second opinion and losing it must degrade
+  // the result rather than fail the case. A Branch A failure DOES reject, and
+  // should — without it there is no grade at all. So does a segmentation MATLAB-
+  // engine failure (matlab_segmentation_failed): see runSegInference.
   //
   // Backend switch (INFERENCE_BACKEND=python|matlab, default python): both
   // functions resolve to the identical JSON shape, so nothing below this line
@@ -739,14 +788,18 @@ async function processCase(caseId) {
   }
 
   let mlResult;
+  // How the MATLAB per-case pipeline actually ran ('session' | 'batch'), or
+  // 'js-fallback' -- recorded as the rule engine's provenance below.
+  const casePipelineRun = { via: null };
   try {
     mlResult = await runCasePipelineMatlab(
       buildCasePipelineInput(imagePath, cameraDeviceId, caseId, segResult,
                              branchA.drGradeCnn, branchA.gradcamMap,
                              caseClinicalInputs(caseRow.patient_age, caseRow.questionnaire_data)),
-      caseId);
+      caseId, casePipelineRun);
   } catch (err) {
     if (ALLOW_MATLAB_FALLBACK && err.code === 'matlab_unavailable') {
+      casePipelineRun.via = 'js-fallback';
       console.warn(`[gradingOrchestrator] case ${caseId}: MATLAB is not installed on `
         + 'this machine — using the JS fallback (matlabFallback.js) for Branch B / '
         + 'evidence report / camera check. On a machine with MATLAB this code path '
@@ -839,6 +892,12 @@ async function processCase(caseId) {
   // override chain below) — an established camera/site's occasional mismatch
   // stays a log line, same as before; the previous behaviour ("never changes
   // the grading") now only holds once this camera/site has a track record.
+  // The stored, three-state form of the same check (migration 0021). The
+  // console.warn below and the probation override are both lossy: the override
+  // only writes a tier_reason while the tier would otherwise be A AND the
+  // camera/site is still on probation, so on an established camera, or on a
+  // case already in Tier B/C, the mismatch used to reach nobody.
+  const cameraCheck = readCameraCheck(mlResult);
   const cameraProbationOverride = mlResult.cameraMismatch === true
     && !cameraSiteProbationCleared;
   if (mlResult.cameraMismatch) {
@@ -988,14 +1047,22 @@ async function processCase(caseId) {
       + `MC-dropout failed: ${branchA.uncertaintyError}`);
   }
 
+  // WHICH ENGINE produced each ML output (standing rule: every case records
+  // it; no silent engine fallback). The quality gate's is not here: it ran at
+  // the PHC and arrived with the case (cases.quality_gate_engine).
+  const engineProvenance = buildEngineProvenance({
+    inferenceBackend: INFERENCE_BACKEND, segResult, casePipelineVia: casePipelineRun.via,
+  });
+
   await pool.query(`
     INSERT INTO grading_results
       (case_id, dr_grade_cnn, referable, confidence_score,
        conformal_tier, model_version, graded_at,
        dr_grade_rule_engine, branch_agreement, uncertainty_score, tier_reason,
-       urgency_score, urgency_factor, urgency_inputs)
-    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10, $11, $12, $13)
+       urgency_score, urgency_factor, urgency_inputs, engine_provenance)
+    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10, $11, $12, $13, $14)
     ON CONFLICT (case_id) DO UPDATE SET
+      engine_provenance    = EXCLUDED.engine_provenance,
       dr_grade_cnn         = EXCLUDED.dr_grade_cnn,
       referable            = EXCLUDED.referable,
       confidence_score     = EXCLUDED.confidence_score,
@@ -1011,7 +1078,7 @@ async function processCase(caseId) {
       urgency_inputs       = EXCLUDED.urgency_inputs
   `, [caseId, grade, referable, confidenceScore, tier, modelVersion,
       ruleEngineGrade, branchAgreement, uncertaintyScore, tierReason ?? null,
-      urgency.score, urgency.factor, urgency.inputs]);
+      urgency.score, urgency.factor, urgency.inputs, engineProvenance]);
 
   // ── Step 4: INSERT INTO explainability_outputs ─────────────────────────────
   // vessel_mask_path, lesion_red_path, lesion_bright_path stay NULL (Phase 3).
@@ -1119,11 +1186,13 @@ async function processCase(caseId) {
     // now nothing stored them, while readFundusImage.m's header claimed the
     // device "is recorded as evidence".
     `UPDATE cases SET status = 'graded', camera_family_detected = $2,
-       eye_laterality_detected = $3, source_format = $4, dicom_device_model = $5
+       eye_laterality_detected = $3, source_format = $4, dicom_device_model = $5,
+       camera_mismatch = $6, camera_expected_family = $7
      WHERE case_id = $1`,
     [caseId, fromMatlab(mlResult.cameraFamily), detectedLaterality,
      blankToNull(fromMatlab(mlResult.sourceFormat)),
-     blankToNull(fromMatlab(mlResult.dicomDeviceModel))]);
+     blankToNull(fromMatlab(mlResult.dicomDeviceModel)),
+     cameraCheck.mismatch, cameraCheck.expectedFamily]);
 
   console.log(`[gradingOrchestrator] case ${caseId}: grade=${grade}, `
     + `confidence=${confidenceScore.toFixed(4)}, tier=${tier}, `
@@ -1215,6 +1284,33 @@ function blankToNull(v) {
   if (typeof v !== 'string') return v ?? null;
   const t = v.trim();
   return t === '' ? null : t;
+}
+
+/**
+ * readCameraCheck(mlResult) -- the reported-vs-detected camera cross-check as
+ * the three states migration 0021 stores, not the two the engines return.
+ *
+ * classifyCameraFamily.m can only compare the detected family against the
+ * family the reported device implies when that device is in
+ * calibrationProfiles.json's deviceAssociations. When it is not -- an
+ * unrecognised dropdown value, or no device reported at all -- it has nothing
+ * to compare against and returns mismatch = false.
+ *
+ * That false means "not checked". Storing it as false would record that this
+ * camera was verified against its own image, about a case where nobody could
+ * look. So the checkability test is expectedFamily, not mismatch:
+ *
+ *   expectedFamily non-empty -> the check ran; mismatch is its real answer
+ *   expectedFamily empty     -> NULL, and no expected family to show
+ *
+ * cameraExpectedFamily was added to runCasePipeline.m's output for exactly
+ * this; a result from an older engine that does not carry it is not-checkable
+ * by the same rule, which is the safe reading of a missing field.
+ */
+function readCameraCheck(mlResult) {
+  const expected = blankToNull(fromMatlab(mlResult.cameraExpectedFamily));
+  if (expected === null) return { mismatch: null, expectedFamily: null };
+  return { mismatch: mlResult.cameraMismatch === true, expectedFamily: expected };
 }
 
 const REGISTERED_MODELS = new Set();
@@ -1427,18 +1523,25 @@ function casePipelineBatchExpr(inputPath) {
 }
 
 /**
- * runCasePipelineMatlab(input, caseId) -> the parsed, §Q-normalised result.
+ * runCasePipelineMatlab(input, caseId, run) -> the parsed, §Q-normalised result.
+ *
+ * `run.via` is set to how it actually ran -- 'session' or 'batch' -- for the
+ * case's engine provenance. Both are MATLAB; the difference is recorded
+ * because a case that paid a cold `matlab -batch` start is worth being able
+ * to find.
  */
-async function runCasePipelineMatlab(input, caseId) {
+async function runCasePipelineMatlab(input, caseId, run = {}) {
   const inputPath = path.join(os.tmpdir(),
     `case_pipeline_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
   fs.writeFileSync(inputPath, JSON.stringify(input));
   try {
     if (matlabSession.alive()) {
       try {
-        return fromMatlabDeep(await matlabSession.call(
+        const viaSession = fromMatlabDeep(await matlabSession.call(
           { casePipeline: inputPath.replace(/\\/g, '/') },
           { timeoutMs: CASE_PIPELINE_TIMEOUT_MS, prefix: 'case' }));
+        run.via = 'session';
+        return viaSession;
       } catch (err) {
         console.warn(`[gradingOrchestrator] case ${caseId}: the MATLAB session could not `
           + `run the grading pipeline (${err.message}); falling back to matlab -batch, `
@@ -1446,6 +1549,7 @@ async function runCasePipelineMatlab(input, caseId) {
       }
     }
     const raw = await spawnMatlabBatch(casePipelineBatchExpr(inputPath));
+    run.via = 'batch';
     // MATLAB start-up text can precede the JSON on stdout.
     const jsonStart = raw.indexOf('{');
     if (jsonStart === -1) throw new Error(`No JSON in MATLAB output.\nRaw:\n${raw}`);
@@ -1462,6 +1566,42 @@ async function runCasePipelineMatlab(input, caseId) {
   }
 }
 
+// ── Engine provenance (entry shape and rules: services/engineProvenance.js) ──
+/**
+ * buildEngineProvenance({ inferenceBackend, segResult, casePipelineVia })
+ *   -> { classifier, segmentation, ruleEngine }
+ *
+ * segmentation is null when it did not run; each of its four models is
+ * whatever segInfer reported in its `engines` block.
+ */
+function buildEngineProvenance({ inferenceBackend, segResult, casePipelineVia }) {
+  const classifier = inferenceBackend === 'matlab'
+    ? engineEntry('matlab', 'MATLAB session (branchAInferMatlab.m); input tensor '
+      + 'preprocessed in Python (preprocessBranchATensor.py)')
+    : engineEntry('python', 'branchAInfer.py (INFERENCE_BACKEND=python)');
+
+  let segmentation = null;
+  if (segResult) {
+    const e = segResult.engines || {};
+    segmentation = {
+      vessel:       normaliseEngineEntry(e.vessel),
+      localization: normaliseEngineEntry(e.localization),
+      hardExudate:  normaliseEngineEntry(e.hardExudate),
+      redLesion:    normaliseEngineEntry(e.redLesion),
+    };
+  }
+
+  const ruleEngine = {
+    session: engineEntry('matlab', 'runCasePipeline.m in the persistent MATLAB session'),
+    batch: engineEntry('matlab', 'runCasePipeline.m via a fresh matlab -batch '
+      + '(the session could not take the request)'),
+    'js-fallback': engineEntry('js-fallback',
+      'matlabFallback.js -- MATLAB not installed, MATLAB_ALLOW_FALLBACK=1', true),
+  }[casePipelineVia] || null;
+
+  return { classifier, segmentation, ruleEngine };
+}
+
 // buildCasePipelineInput is exported for testing: asserting on the INPUT it
 // actually produces is a real check, whereas grepping this file's source is
 // not -- a comment quoting an old field would fail such a grep while the
@@ -1471,5 +1611,5 @@ module.exports = {
   caseClinicalInputs,
   runBranchAInference, runBranchAInferenceMatlab, INFERENCE_BACKEND,
   isCaptureUngradable, hasClearedCameraSiteProbation, CAMERA_PROBATION_MIN_CASES,
-  segment,
+  segment, buildEngineProvenance,
 };

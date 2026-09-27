@@ -5,6 +5,8 @@ import { AppLayout } from './components/layout/AppLayout';
 import { PatientRegistrationForm } from './components/screens/PatientRegistrationForm';
 import { CaptureScreen } from './components/screens/CaptureScreen';
 import { LocalQueueTable } from './components/screens/LocalQueueTable';
+import { PairedDevicesPage } from './components/screens/PairedDevicesPage';
+import { DemoDataBanner } from './components/shared/DemoDataBanner';
 
 function App() {
   const [auth, setAuth] = useState(() => {
@@ -34,6 +36,7 @@ function App() {
 
   return (
     <BrowserRouter>
+      <DemoDataBanner />
       <Routes>
         {/* Landing Page: Authentication Screen */}
         <Route
@@ -60,6 +63,10 @@ function App() {
           <Route path="/register" element={<PatientRegistrationForm />} />
           <Route path="/capture" element={<CaptureScreen />} />
           <Route path="/queue" element={<LocalQueueTable />} />
+          {/* Who can replicate patient records with this PC, and how to cut
+              one off. auth carries the role the SERVER issued, so the screen
+              can hide an admin-only action; the backend still enforces it. */}
+          <Route path="/devices" element={<PairedDevicesPage auth={auth} />} />
         </Route>
 
         {/* Fallback to landing / dashboard */}

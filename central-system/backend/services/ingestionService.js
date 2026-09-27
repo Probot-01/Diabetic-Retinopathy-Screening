@@ -25,8 +25,10 @@ const path = require('path');
 
 const pool       = require('../db/pgClient');
 const mediaPaths = require('./mediaPaths');
+const mediaCrypto = require('./mediaCrypto');
 const cfg        = require('./authConfig');
 const lesionCounts = require('./lesionCounts');
+const engineProvenance = require('./engineProvenance');
 
 // Task 4.6: .dcm accepted because real fundus cameras export DICOM under the
 // Ophthalmic Photography IOD, and readFundusImage.m now reads it. Central only
@@ -115,6 +117,25 @@ async function ensurePatientReference(client, patientId) {
 }
 
 /**
+ * readQualityGateEngine(value) -> { engine, fallback, detail } | null
+ *
+ * Which engine ran the PHC's quality gate on this capture (engine provenance,
+ * migration 0019). Optional -- absent from an older PHC build, which is stored
+ * as NULL ("not recorded"). Present but malformed is a 400, not a silent NULL:
+ * a PHC that believes it is reporting provenance must find out that it is not.
+ */
+function readQualityGateEngine(value) {
+  const raw = parseJsonField(value, 'qualityGateEngine');
+  if (raw === null) return null;
+  const entry = engineProvenance.normaliseEngineEntry(raw, engineProvenance.QUALITY_GATE_ENGINES);
+  if (!entry) {
+    throw badRequest('invalid_field', 'qualityGateEngine must be '
+      + '{ "engine": "matlab" | "python" | "js-fallback" | "js-device", "fallback": boolean, "detail": string|null }.');
+  }
+  return entry;
+}
+
+/**
  * readCaseFields(fields) -- the validation and parsing shared by a full case
  * (ingestCase) and a summary packet (ingestSummary). Throws 400-shaped errors.
  */
@@ -149,6 +170,7 @@ function readCaseFields(fields) {
     questionnaireData: parseJsonField(fields.questionnaireData, 'questionnaireData'),
     captureMetadata:   parseJsonField(fields.captureMetadata, 'captureMetadata'),
     qualityScores:     parseJsonField(fields.qualityScores, 'qualityScores'),
+    qualityGateEngine: readQualityGateEngine(fields.qualityGateEngine),
     pendingCount: pendingCount === undefined || pendingCount === null || pendingCount === ''
       ? null : parseInt(pendingCount, 10),
     patientName:          fields.patientName,
@@ -313,8 +335,8 @@ async function ingestCase(fields) {
       INSERT INTO cases
         (patient_id, phc_id, capture_id_ref, camera_device_id, image_path,
          questionnaire_data, capture_metadata, status, captured_at, quality_scores,
-         eye_laterality_reported, processing_started_at)
-      VALUES ($1, $2, $3, $4, '', $5, $6, 'processing', $7, $8, $9, now())
+         eye_laterality_reported, processing_started_at, quality_gate_engine)
+      VALUES ($1, $2, $3, $4, '', $5, $6, 'processing', $7, $8, $9, now(), $10)
       ON CONFLICT (capture_id_ref) DO NOTHING
       RETURNING case_id, received_at
     `, [f.patientId, f.phcId, f.captureIdRef, f.cameraDeviceId,
@@ -323,7 +345,7 @@ async function ingestCase(fields) {
         // is wrong for any case that synced late, so the sync manager (Task 3.4)
         // must always send the local captures.captured_at.
         f.capturedAt || new Date().toISOString(), f.qualityScores,
-        reportedLaterality(f.captureMetadata)]);
+        reportedLaterality(f.captureMetadata), f.qualityGateEngine]);
 
     let caseId, receivedAt, fromSummary = false;
 
@@ -357,7 +379,7 @@ async function ingestCase(fields) {
       // cases_image_required_unless_awaiting constraint is checked per
       // statement, so leaving 'awaiting_image' before the path is set fails.
       const summaryImagePath = mediaPaths.originalPath(caseId, ext);
-      fs.writeFileSync(summaryImagePath, buffer);
+      mediaCrypto.writeFile(summaryImagePath, buffer);   // encrypted at rest when MEDIA_ENCRYPTION_KEY is set
       await client.query(`
         UPDATE cases
         SET status             = 'processing',
@@ -372,16 +394,17 @@ async function ingestCase(fields) {
             capture_metadata   = COALESCE($5, capture_metadata),
             captured_at        = COALESCE($6, captured_at),
             quality_scores     = COALESCE($7, quality_scores),
-            eye_laterality_reported = COALESCE($9, eye_laterality_reported)
+            eye_laterality_reported = COALESCE($9, eye_laterality_reported),
+            quality_gate_engine = COALESCE($10, quality_gate_engine)
         WHERE case_id = $1
       `, [caseId, f.phcId, f.cameraDeviceId, f.questionnaireData, f.captureMetadata,
           f.capturedAt, f.qualityScores, summaryImagePath,
-          reportedLaterality(f.captureMetadata)]);
+          reportedLaterality(f.captureMetadata), f.qualityGateEngine]);
     }
 
     if (!fromSummary) {
       const imagePath = mediaPaths.originalPath(caseId, ext);
-      fs.writeFileSync(imagePath, buffer);
+      mediaCrypto.writeFile(imagePath, buffer);   // encrypted at rest when MEDIA_ENCRYPTION_KEY is set
       await client.query('UPDATE cases SET image_path = $1 WHERE case_id = $2',
         [imagePath, caseId]);
     }
@@ -432,14 +455,14 @@ async function ingestSummary(fields) {
       INSERT INTO cases
         (patient_id, phc_id, capture_id_ref, camera_device_id, image_path,
          questionnaire_data, capture_metadata, status, captured_at, quality_scores,
-         eye_laterality_reported)
-      VALUES ($1, $2, $3, $4, NULL, $5, $6, 'awaiting_image', $7, $8, $9)
+         eye_laterality_reported, quality_gate_engine)
+      VALUES ($1, $2, $3, $4, NULL, $5, $6, 'awaiting_image', $7, $8, $9, $10)
       ON CONFLICT (capture_id_ref) DO NOTHING
       RETURNING case_id, received_at, status
     `, [f.patientId, f.phcId, f.captureIdRef, f.cameraDeviceId,
         f.questionnaireData, f.captureMetadata,
         f.capturedAt || new Date().toISOString(), f.qualityScores,
-        reportedLaterality(f.captureMetadata)]);
+        reportedLaterality(f.captureMetadata), f.qualityGateEngine]);
 
     let row = inserted.rows[0];
     const duplicate = !row;
@@ -499,12 +522,13 @@ async function getCaseDetail(caseId) {
     SELECT
       c.case_id, c.image_path, c.questionnaire_data, c.capture_metadata,
       c.patient_id, c.eye_laterality_reported, c.eye_laterality_detected,
-      c.status, c.failure_code, c.failed_at,
+      c.status, c.failure_code, c.failed_at, c.quality_gate_engine,
+      g.engine_provenance,
       s.fovea_unreliable,
       p.patient_reference,
       g.dr_grade_cnn, g.dr_grade_rule_engine, g.branch_agreement,
       c.source_format, c.dicom_device_model, c.camera_device_id,
-      c.camera_family_detected,
+      c.camera_family_detected, c.camera_mismatch, c.camera_expected_family,
       g.confidence_score, g.uncertainty_score, g.conformal_tier, g.tier_reason,
       g.model_version, g.urgency_score, g.urgency_factor, g.urgency_inputs,
       g.claimed_by, g.claimed_at, claimant.name AS claimed_by_name,
@@ -587,6 +611,14 @@ async function getCaseDetail(caseId) {
     dicomDeviceModel:  r.dicom_device_model ?? null,
     cameraDeviceReported: r.camera_device_id ?? null,
     cameraFamilyDetected: r.camera_family_detected ?? null,
+    // The reported-vs-detected cross-check (migration 0021), three-state on
+    // purpose: true disagreed, false agreed, null the check could not run
+    // because no expected family was known for the reported device. A null is
+    // NOT an agreement -- classifyCameraFamily.m returns false in both the
+    // "agreed" and the "nothing to compare" case, and only one of those is a
+    // statement about this camera.
+    cameraMismatch:       r.camera_mismatch ?? null,
+    cameraExpectedFamily: r.camera_expected_family ?? null,
     // WHY this tier -- the escalation that fired, or the floor that raised it
     // from A. Five different situations produce a "B", and they call for
     // different things from the reviewer: "the model is unsure" is not the
@@ -620,6 +652,14 @@ async function getCaseDetail(caseId) {
     // quadrants are still keyed to that unreliable fovea, so they cannot be
     // trusted). null when not reported.
     foveaUnreliable: r.fovea_unreliable ?? null,
+
+    // WHICH ENGINE produced each ML output (migration 0019): classifier,
+    // each segmentation model, rule engine, and the PHC's quality gate. Every
+    // key is always present; null means NOT RECORDED (not graded yet, graded
+    // before provenance was stored, or segmentation did not run) -- never a
+    // guess from the current configuration.
+    engineProvenance: engineProvenance.toContractShape(
+      r.engine_provenance, r.quality_gate_engine),
 
     // Why grading gave up, on a case whose status is 'error' (migration 0014).
     // The CODE only: failure_reason can quote internal paths and library

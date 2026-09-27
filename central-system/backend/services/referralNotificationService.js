@@ -209,6 +209,14 @@ async function handleConfirmedReferral(caseId, opts = {}) {
   if (DRY_RUN || !isConfigured()) {
     const why = DRY_RUN ? 'dry_run' : 'not_configured';
     console.log(`[referral] SMS ${why} — would send to ${maskNumber(to)}:\n  ${body}`);
+    // §10.5: the patient was NOT told, so somebody has to phone them. With no
+    // SMS provider configured that is true of EVERY referral, and leaving it
+    // in 'referred' made it look like an ordinary one the patient had been
+    // messaged about. dry_run is a developer's opt-in to "log, don't send" and
+    // keeps its old behaviour.
+    if (why === 'not_configured') {
+      await flipToManualFollowUp(referralId, 'SMS provider not configured');
+    }
     return { referralId, alreadyReferred: false,
              sms: await record(caseId, row, why, null, null, body) };
   }

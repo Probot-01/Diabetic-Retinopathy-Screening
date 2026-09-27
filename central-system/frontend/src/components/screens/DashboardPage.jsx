@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { centralApi } from '../../api/centralApiClient';
+import { USE_MOCK_DATA } from '../../config';
+import { LoadError } from '../shared/LoadError';
 import { Chart, registerables } from 'chart.js';
 import { Bar, Doughnut, Line } from 'react-chartjs-2';
 
@@ -72,8 +74,21 @@ const useCountUp = (target, duration = 1200) => {
       }
     };
 
+    const finalText = isFloat ? numericTarget.toFixed(decimals) : Math.round(numericTarget).toLocaleString();
+    // The count-up is decoration; the number is the data. Browsers pause
+    // requestAnimationFrame in a background or throttled tab, which left a real
+    // figure stuck on its starting "0" -- "0s" average review time reads as
+    // "reviews are instant". So: no animation while hidden, and a timer that
+    // lands the true value whatever the animation did.
+    if (typeof document !== 'undefined' && document.hidden) {
+      setDisplay(finalText);
+      return undefined;
+    }
+    const settle = setTimeout(() => setDisplay(finalText), duration + 250);
+
     rafRef.current = requestAnimationFrame(animate);
     return () => {
+      clearTimeout(settle);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [target, duration]);
@@ -81,13 +96,28 @@ const useCountUp = (target, duration = 1200) => {
   return display;
 };
 
+// Live mode: the dashboard endpoint returns only casesToday, casesPerPhc and
+// averageReviewTurnaroundSeconds (api-contracts.md). Anything else is shown as
+// "—" rather than a number from nowhere; the trend deltas are mock-only copy.
+const NA = '—';
+const orNA = (v) => (v === null || v === undefined ? NA : v);
+const pctOrNA = (v) => (typeof v === 'number' ? (v * 100).toFixed(1) : NA);
+const mockOnly = (text) => (USE_MOCK_DATA ? text : undefined);
+
+const NotFromApi = ({ what }) => (
+  <p className="t-mono" style={{ fontSize: 'var(--fs-tiny)', color: 'var(--c-text-muted)', margin: 0 }}>
+    {what} is not provided by the central API yet (only in DEMO DATA mode).
+  </p>
+);
+
 const StatCard = React.memo(({ label, value, delta, suffix = '' }) => {
   const animatedValue = useCountUp(value, 1000);
+  const numeric = !isNaN(parseFloat(String(value).replace(/,/g, '')));
   return (
     <div className="stat hash-fill">
       <div className="stat-shimmer" />
       <div className="stat__label">{label}</div>
-      <div className="stat__value">{animatedValue}{suffix}</div>
+      <div className="stat__value">{animatedValue}{numeric ? suffix : ''}</div>
       {delta && <div className="stat__delta" style={{ color: delta.startsWith('+') || delta.startsWith('-') ? (delta.startsWith('+') ? 'var(--c-success)' : 'var(--c-warning)') : 'var(--c-text-muted)' }}>{delta}</div>}
     </div>
   );
@@ -100,20 +130,29 @@ export const DashboardPage = () => {
   const { t } = useTranslation();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // 3-State Sorting for Grade Breakdown Table
   const [gradeSort, setGradeSort] = useState({ key: null, direction: 'none' });
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setLoadError(null);
     centralApi.getAdminDashboard().then(d => {
       if (active) {
         setData(d);
         setLoading(false);
       }
+    }).catch(err => {
+      if (active) {
+        setLoadError(err);
+        setLoading(false);
+      }
     });
     return () => { active = false; };
-  }, []);
+  }, [reloadKey]);
 
   const handleGradeSort = useCallback((field) => {
     setGradeSort(prev => {
@@ -183,7 +222,8 @@ export const DashboardPage = () => {
       return { labels: [], datasets: [] };
     }
     return {
-      labels: data.casesPerPhc.map(p => p.phcName.replace('PHC ', '')),
+      // phcName is null for the bucket of cases that arrived without a phcId.
+      labels: data.casesPerPhc.map(p => (p.phcName || 'Unattributed').replace('PHC ', '')),
       datasets: [{
         label: t('central.dashboard.charts.casesToday', 'Cases Today'),
         data: data.casesPerPhc.map(p => p.count),
@@ -267,6 +307,14 @@ export const DashboardPage = () => {
     });
   }, [data, gradeSort]);
 
+  if (loadError) {
+    return (
+      <div className="section">
+        <LoadError error={loadError} what="the district dashboard" onRetry={() => setReloadKey(k => k + 1)} />
+      </div>
+    );
+  }
+
   if (loading || !data) {
     return (
       <div className="section">
@@ -282,7 +330,9 @@ export const DashboardPage = () => {
     );
   }
 
-  const totalCases = data.drGradeDistribution.reduce((sum, d) => sum + d.count, 0);
+  const totalCases = data.drGradeDistribution
+    ? data.drGradeDistribution.reduce((sum, d) => sum + d.count, 0).toLocaleString()
+    : NA;
 
   return (
     <div className="section">
@@ -292,39 +342,39 @@ export const DashboardPage = () => {
           <h1 className="section__title" style={{ marginBottom: 0 }}>{t('central.dashboard.title', 'DASHBOARD')}</h1>
         </div>
         <span className="t-mono" style={{ opacity: 0.7 }}>
-          {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' })}
+          {new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' })}
         </span>
       </div>
 
       {/* Stat Cards — Bento Grid Row 1: Operational & Processing */}
       <div className="bento u-mb-4">
         <div className="bento--span-3">
-          <StatCard label={t('central.dashboard.stats.casesToday', 'CASES TODAY')} value={data.casesToday} delta="+12% from yesterday" />
+          <StatCard label={t('central.dashboard.stats.casesToday', 'CASES TODAY')} value={orNA(data.casesToday)} delta={mockOnly('+12% from yesterday')} />
         </div>
         <div className="bento--span-3">
-          <StatCard label={t('central.dashboard.stats.thisWeek', 'THIS WEEK')} value={data.casesThisWeek} delta="+8% WoW" />
+          <StatCard label={t('central.dashboard.stats.thisWeek', 'THIS WEEK')} value={orNA(data.casesThisWeek)} delta={mockOnly('+8% WoW')} />
         </div>
         <div className="bento--span-3">
-          <StatCard label={t('central.dashboard.stats.totalProcessed', 'TOTAL PROCESSED')} value={data.totalCasesProcessed.toLocaleString()} />
+          <StatCard label={t('central.dashboard.stats.totalProcessed', 'TOTAL PROCESSED')} value={data.totalCasesProcessed != null ? data.totalCasesProcessed.toLocaleString() : NA} />
         </div>
         <div className="bento--span-3">
-          <StatCard label={t('central.dashboard.stats.avgReviewTime', 'AVG REVIEW TIME')} value={data.averageReviewTurnaroundSeconds} suffix="s" delta="-3s from last week" />
+          <StatCard label={t('central.dashboard.stats.avgReviewTime', 'AVG REVIEW TIME')} value={orNA(data.averageReviewTurnaroundSeconds)} suffix="s" delta={mockOnly('-3s from last week')} />
         </div>
       </div>
 
       {/* Stat Cards — Bento Grid Row 2: AI Quality & Model Reliability */}
       <div className="bento u-mb-6">
         <div className="bento--span-3">
-          <StatCard label={t('central.dashboard.stats.modelAccuracy', 'MODEL ACCURACY')} value={(data.modelAccuracy * 100).toFixed(1)} suffix="%" />
+          <StatCard label={t('central.dashboard.stats.modelAccuracy', 'MODEL ACCURACY')} value={pctOrNA(data.modelAccuracy)} suffix="%" />
         </div>
         <div className="bento--span-3">
-          <StatCard label={t('central.dashboard.stats.overrideRate', 'OVERRIDE RATE')} value={(data.overrideRate * 100).toFixed(1)} suffix="%" delta="Target: < 10%" />
+          <StatCard label={t('central.dashboard.stats.overrideRate', 'OVERRIDE RATE')} value={pctOrNA(data.overrideRate)} suffix="%" delta="Target: < 10%" />
         </div>
         <div className="bento--span-3">
-          <StatCard label={t('central.dashboard.stats.imagesRejected', 'IMAGES REJECTED (QUALITY)')} value={data.imagesRejectedQuality || 38} delta="2.9% rate (-0.4%)" />
+          <StatCard label={t('central.dashboard.stats.imagesRejected', 'IMAGES REJECTED (QUALITY)')} value={orNA(data.imagesRejectedQuality)} delta={mockOnly('2.9% rate (-0.4%)')} />
         </div>
         <div className="bento--span-3">
-          <StatCard label={t('central.dashboard.stats.avgConfidence', 'AVG. CONFIDENCE SCORE')} value={((data.avgConfidenceScore || 0.924) * 100).toFixed(1)} suffix="%" delta="High reliability tier" />
+          <StatCard label={t('central.dashboard.stats.avgConfidence', 'AVG. CONFIDENCE SCORE')} value={pctOrNA(data.avgConfidenceScore)} suffix="%" delta={mockOnly('High reliability tier')} />
         </div>
       </div>
 
@@ -333,6 +383,7 @@ export const DashboardPage = () => {
         {/* Weekly Trend */}
         <div className="chart-container" style={{ border: 'var(--border)', padding: 'var(--sp-6)' }}>
           <h3 className="t-h3 u-mb-4">{t('central.dashboard.charts.weeklyTrend', 'WEEKLY SCREENING TREND')}</h3>
+          {!data.weeklyTrend && <NotFromApi what="The weekly trend" />}
           <div style={{ height: '280px' }}>
             <Line data={weeklyChartData} options={{
               ...chartOptions,
@@ -357,6 +408,7 @@ export const DashboardPage = () => {
       <div className="dashboard-breakdown-grid">
         <div className="chart-container" style={{ border: 'var(--border)', padding: 'var(--sp-6)', position: 'relative' }}>
           <h3 className="t-h3 u-mb-4">{t('central.dashboard.charts.drGradeDist', 'DR GRADE DISTRIBUTION')}</h3>
+          {!data.drGradeDistribution && <NotFromApi what="The grade distribution" />}
           <div style={{ height: '270px', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Doughnut data={gradeChartData} options={donutOptions} />
             {/* Center cutout KPI overlay */}
@@ -371,7 +423,7 @@ export const DashboardPage = () => {
               }}
             >
               <div style={{ fontFamily: 'var(--f-display)', fontSize: '1.5rem', fontWeight: 900, color: 'var(--c-crimson)', lineHeight: 1 }}>
-                {totalCases.toLocaleString()}
+                {totalCases}
               </div>
               <div style={{ fontFamily: 'var(--f-mono)', fontSize: '9px', letterSpacing: '0.12em', color: 'var(--c-text-muted)', fontWeight: 700, marginTop: '2px' }}>
                 {t('central.dashboard.charts.totalCases', 'TOTAL CASES')}

@@ -208,6 +208,7 @@ class SyncManager {
             compositeScore: b.capture.qualityScores.compositeScore, preset: b.capture.qualityScores.preset,
             analysedAt: b.capture.qualityScores.analysedAt, bestEffort: b.capture.bestEffort, source: 'mobile_js_port' }
         : null,
+      qualityGateEngine: b.capture.qualityEngine,
       pendingCount,
     };
 

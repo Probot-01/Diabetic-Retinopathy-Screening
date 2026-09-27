@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 
-// Port 5180 keeps clear of the central app (5173) and PHC app (5174),
+// Port 5180 keeps clear of the PHC app (5173) and central app (5174),
 // which the role buttons link to.
 export default defineConfig({
   server: { port: 5180 },

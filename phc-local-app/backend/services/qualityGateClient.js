@@ -53,14 +53,17 @@ const { runQualityGateFallback } = require('./qualityGateFallback');
 // exactly that machine). When true, a MATLAB spawn failure (ENOENT — the
 // interpreter genuinely could not be launched) falls back to a pure-JS
 // re-implementation of the same decision logic (qualityGateFallback.js)
-// instead of failing the capture with 503. Set QUALITY_GATE_ALLOW_FALLBACK=0
-// to disable this and get the original hard-fail behaviour back.
+// instead of failing the capture with 503.
+//
+// OFF by default (2026-09-26): without MATLAB or the exe the capture gets
+// 503 quality_gate_failed (image saved, re-checkable). Opt in with
+// QUALITY_GATE_ALLOW_FALLBACK=1 -- standing rule: no silent engine fallback.
 //
 // This does NOT change behaviour on a machine that actually has MATLAB or a
 // compiled exe: both are tried first, exactly as before, and a REAL MATLAB
 // error (bad image, license problem, non-zero exit) is never routed to the
 // fallback — only "the interpreter could not be spawned at all" is.
-const ALLOW_JS_FALLBACK = process.env.QUALITY_GATE_ALLOW_FALLBACK !== '0';
+const ALLOW_JS_FALLBACK = process.env.QUALITY_GATE_ALLOW_FALLBACK === '1';
 
 // Absolute path to the quality-gate-matlab/ folder so MATLAB can addpath it.
 const MATLAB_GATE_DIR = path.resolve(__dirname, '..', 'quality-gate-matlab');
@@ -198,7 +201,8 @@ async function runQualityGate(imagePath, cameraDeviceId) {
     } catch (err) {
       throw new Error(`Quality gate executable failed: ${err.message}`);
     }
-    return parseGateOutput(rawExe);
+    return withEngine(parseGateOutput(rawExe), 'matlab', false,
+      'compiled qualityGate executable (MATLAB Runtime)');
   }
 
   // Escape backslashes and single-quotes for embedding in a MATLAB string.
@@ -226,12 +230,23 @@ async function runQualityGate(imagePath, cameraDeviceId) {
         '[qualityGateClient] MATLAB is not installed on this machine — using the '
         + 'JS quality-gate fallback (qualityGateFallback.js) instead. On a machine '
         + 'with MATLAB (or QUALITY_GATE_EXE) this code path is never taken.');
-      return runQualityGateFallback(imagePath);
+      return withEngine(await runQualityGateFallback(imagePath), 'js-fallback', true,
+        'qualityGateFallback.js -- MATLAB not installed, QUALITY_GATE_ALLOW_FALLBACK=1');
     }
     throw new Error(`Quality gate MATLAB call failed: ${err.message}`);
   }
 
-  return parseGateOutput(raw);
+  return withEngine(parseGateOutput(raw), 'matlab', false, 'qualityGateMain.m via matlab -batch');
+}
+
+/**
+ * withEngine(result, engine, fallback, detail) -- the gate's verdict plus WHICH
+ * ENGINE produced it (standing rule: every case records the engine behind each
+ * ML output, and no engine switch is silent). Stored on the capture and sent
+ * to central with the case as qualityGateEngine -- see api-contracts.md.
+ */
+function withEngine(result, engine, fallback, detail) {
+  return { ...result, engine: { engine, fallback, detail } };
 }
 
 /**

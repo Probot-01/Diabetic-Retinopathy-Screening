@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Component } from 'react';
+import React, { useState, useEffect, useCallback, Component } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { EyeJourneyLogin } from './components/screens/EyeJourneyLogin';
 import { CentralLayout } from './components/layout/CentralLayout';
@@ -11,6 +11,9 @@ import { PhcHealthPage } from './components/screens/PhcHealthPage';
 import { ResourceRecommendationsPanel } from './components/screens/ResourceRecommendationsPanel';
 import { CentralProfilePage } from './components/screens/CentralProfilePage';
 import { CentralSettingsPage } from './components/settings/CentralSettingsPage';
+import { DemoDataBanner } from './components/shared/DemoDataBanner';
+import { centralApi, UNAUTHENTICATED_EVENT } from './api/centralApiClient';
+import { USE_MOCK_DATA } from './config';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -45,40 +48,65 @@ class ErrorBoundary extends Component {
   }
 }
 
+// Server role -> the app's route namespace.
+const appRole = (serverRole) => (serverRole === 'district_admin' ? 'admin' : serverRole === 'ophthalmologist' ? 'ophthalmologist' : null);
+
+/**
+ * Live mode: the profile shown in the header comes from the authenticated
+ * session (design doc §5.1/§5.2 "reviewer identity comes from the
+ * authenticated session"). Only what the server knows is filled in.
+ */
+const profileFromUser = (user) => ({
+  username: user.email,
+  fullName: user.name,
+  email: user.email,
+  phone: '',
+  location: '',
+  designation: user.role === 'district_admin' ? 'District Admin' : 'Ophthalmologist',
+  officerId: '',
+  district: '',
+  role: appRole(user.role),
+});
+
+// Mock mode only: the demo profile the design was built around.
+const demoProfile = (role, username) => {
+  const isDoc = role === 'ophthalmologist';
+  const cleanUser = username && username.trim() ? username.trim() : 'demo';
+  return {
+    username: cleanUser,
+    fullName: isDoc ? 'Dr. Demo Ophthalmologist' : 'Demo District Admin',
+    phone: '',
+    location: isDoc ? 'District Civil Hospital' : 'District Health Office',
+    email: '',
+    designation: isDoc ? 'Ophthalmologist' : 'District Health Worker (DHW)',
+    officerId: '',
+    district: '',
+    role,
+  };
+};
+
 const RoleRouter = () => {
-  const [role, setRole] = useState(() => {
-    return localStorage.getItem('netra_user_role') || null;
-  });
+  // Live mode trusts nothing stored in the browser: the role comes from the
+  // server (/auth/me), and until that answers, protected routes wait.
+  const [role, setRole] = useState(() =>
+    USE_MOCK_DATA ? (localStorage.getItem('netra_user_role') || null) : null);
+  const [authChecked, setAuthChecked] = useState(USE_MOCK_DATA);
   const [userProfile, setUserProfile] = useState(() => {
+    if (!USE_MOCK_DATA) return null;
     const saved = localStorage.getItem('netra_user_profile');
     if (saved) {
       try { return JSON.parse(saved); } catch (e) {}
     }
-    const currentRole = localStorage.getItem('netra_user_role') || 'ophthalmologist';
-    const isDoc = currentRole === 'ophthalmologist';
-    return {
-      username: 'krrish',
-      fullName: isDoc ? 'Dr. Krrish Gadekar' : 'Krrish Gadekar',
-      phone: '+91 98230 44821',
-      location: isDoc ? 'District Civil Hospital, Pune' : 'Pune District Health Office',
-      email: 'krrishgadekar@gmail.com',
-      designation: isDoc ? 'Chief Retina Specialist / Lead Ophthalmologist' : 'District Health Worker (DHW)',
-      officerId: isDoc ? 'MCI-MH-2018-89421' : 'DHW-MH-PUN-042',
-      district: isDoc ? 'District Civil Hospital & Regional Tele-Ophthalmology Centre, Pune' : 'Pune District (Rural & Peri-Urban Zone)',
-      role: currentRole
-    };
+    return demoProfile(localStorage.getItem('netra_user_role') || 'ophthalmologist');
   });
   const navigate = useNavigate();
 
   // Initialize theme, text size (--fs), and high contrast on startup
   useEffect(() => {
-    // 1. Dark mode from contrast setting
     const savedContrast = localStorage.getItem('netrasetu_contrast');
     if (savedContrast === 'dark') {
       document.documentElement.setAttribute('data-contrast', 'dark');
     }
-
-    // 2. Settings text size (--fs) and high contrast
     try {
       const savedSettings = localStorage.getItem('netrasetu_settings');
       if (savedSettings) {
@@ -94,56 +122,83 @@ const RoleRouter = () => {
     } catch (e) {}
   }, []);
 
-  const handleLogin = (selectedRole, username) => {
-    localStorage.setItem('netra_user_role', selectedRole);
-    setRole(selectedRole);
-    const isDoc = selectedRole === 'ophthalmologist';
-    const cleanUser = username && username.trim() ? username.trim() : 'krrish';
-    const isKrrish = cleanUser.toLowerCase().includes('krrish') || cleanUser.toLowerCase() === 'doctor' || cleanUser.toLowerCase() === 'admin';
-    const formattedName = isKrrish 
-      ? (isDoc ? 'Dr. Krrish Gadekar' : 'Krrish Gadekar')
-      : cleanUser;
+  // Live: recover the session after a reload (the cookie is httpOnly, so only
+  // the server can say who this is).
+  useEffect(() => {
+    if (USE_MOCK_DATA) return;
+    let cancelled = false;
+    centralApi.me()
+      .then((s) => {
+        if (cancelled) return;
+        setRole(appRole(s.user.role));
+        setUserProfile(profileFromUser(s.user));
+      })
+      .catch(() => { /* not logged in: stay on the login page */ })
+      .finally(() => { if (!cancelled) setAuthChecked(true); });
+    return () => { cancelled = true; };
+  }, []);
 
-    const profile = {
-      username: cleanUser,
-      fullName: formattedName,
-      phone: '+91 98230 44821',
-      location: isDoc ? 'District Civil Hospital, Pune' : 'Pune District Health Office',
-      email: 'krrishgadekar@gmail.com',
-      designation: isDoc ? 'Chief Retina Specialist / Lead Ophthalmologist' : 'District Health Worker (DHW)',
-      officerId: isDoc ? 'MCI-MH-2018-89421' : 'DHW-MH-PUN-042',
-      district: isDoc ? 'District Civil Hospital & Regional Tele-Ophthalmology Centre, Pune' : 'Pune District (Rural & Peri-Urban Zone)',
-      role: selectedRole
-    };
-    localStorage.setItem('netra_user_profile', JSON.stringify(profile));
-    setUserProfile(profile);
-    if (selectedRole === 'ophthalmologist') {
-      navigate('/ophth/queue');
-    } else {
-      navigate('/admin/dashboard');
-    }
-  };
-
-  const handleLogout = () => {
+  const clearSession = useCallback(() => {
     localStorage.removeItem('netra_user_role');
     setRole(null);
+    setUserProfile(null);
+  }, []);
+
+  // Global 401 handler: any API call that finds the session gone lands here.
+  useEffect(() => {
+    if (USE_MOCK_DATA) return undefined;
+    const onUnauth = () => { clearSession(); navigate('/', { replace: true }); };
+    window.addEventListener(UNAUTHENTICATED_EVENT, onUnauth);
+    return () => window.removeEventListener(UNAUTHENTICATED_EVENT, onUnauth);
+  }, [clearSession, navigate]);
+
+  // Live: called with the server's user after a successful POST /auth/login.
+  // Mock: called with the demo role and username.
+  const handleLogin = (selectedRole, username, serverUser) => {
+    const profile = serverUser ? profileFromUser(serverUser) : demoProfile(selectedRole, username);
+    if (USE_MOCK_DATA) {
+      localStorage.setItem('netra_user_role', selectedRole);
+      localStorage.setItem('netra_user_profile', JSON.stringify(profile));
+    }
+    setRole(selectedRole);
+    setUserProfile(profile);
+    navigate(selectedRole === 'ophthalmologist' ? '/ophth/queue' : '/admin/dashboard');
+  };
+
+  const handleLogout = async () => {
+    if (!USE_MOCK_DATA) await centralApi.logout().catch(() => {});
+    clearSession();
     navigate('/');
   };
 
   const handleUpdateProfile = (newProfile) => {
     const merged = { ...userProfile, ...newProfile };
-    localStorage.setItem('netra_user_profile', JSON.stringify(merged));
+    if (USE_MOCK_DATA) localStorage.setItem('netra_user_profile', JSON.stringify(merged));
     setUserProfile(merged);
+  };
+
+  // Route guard: the right role gets the layout, anyone else goes to login.
+  // The server enforces the same rule on every endpoint; this only keeps the
+  // UI from showing screens whose every request would be refused.
+  const guard = (needed) => {
+    if (!authChecked) return null;   // waiting for /auth/me
+    if (role === needed) {
+      return <CentralLayout role={role} userProfile={userProfile} onUpdateProfile={handleUpdateProfile} onLogout={handleLogout} />;
+    }
+    if (role) return <Navigate to={role === 'ophthalmologist' ? '/ophth/queue' : '/admin/dashboard'} replace />;
+    return <Navigate to="/" replace />;
   };
 
   return (
     <Routes>
-      <Route path="/" element={<EyeJourneyLogin onLogin={handleLogin} />} />
-      
+      <Route path="/" element={
+        authChecked && role
+          ? <Navigate to={role === 'ophthalmologist' ? '/ophth/queue' : '/admin/dashboard'} replace />
+          : <EyeJourneyLogin onLogin={handleLogin} />
+      } />
+
       {/* Ophthalmologist Routes */}
-      <Route path="/ophth" element={
-        role === 'ophthalmologist' ? <CentralLayout role={role} userProfile={userProfile} onUpdateProfile={handleUpdateProfile} onLogout={handleLogout} /> : <Navigate to="/" replace />
-      }>
+      <Route path="/ophth" element={guard('ophthalmologist')}>
         <Route index element={<Navigate to="queue" replace />} />
         <Route path="queue" element={<ReviewQueuePage />} />
         <Route path="case/:caseId" element={<CaseDetailPage />} />
@@ -152,9 +207,7 @@ const RoleRouter = () => {
       </Route>
 
       {/* Admin Routes */}
-      <Route path="/admin" element={
-        role === 'admin' ? <CentralLayout role={role} userProfile={userProfile} onUpdateProfile={handleUpdateProfile} onLogout={handleLogout} /> : <Navigate to="/" replace />
-      }>
+      <Route path="/admin" element={guard('admin')}>
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<AdminScrollDashboard />} />
         <Route path="dashboard/detailed" element={<DashboardPage />} />
@@ -173,6 +226,7 @@ const RoleRouter = () => {
 function App() {
   return (
     <ErrorBoundary>
+      <DemoDataBanner />
       <BrowserRouter>
         <RoleRouter />
       </BrowserRouter>

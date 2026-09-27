@@ -175,6 +175,21 @@ out.dicomDeviceModel = imgMeta.deviceModel;
 out.imageLaterality  = imgMeta.laterality;
 out.cameraFamily     = cameraFamily;
 out.cameraMismatch   = ~isempty(cameraDetail) && cameraDetail.mismatch;
+% WHETHER THE CROSS-CHECK COULD RUN AT ALL. classifyCameraFamily compares the
+% detected family against the family the REPORTED device implies, and it can
+% only do that when that device is in calibrationProfiles.json's
+% deviceAssociations. When it is not -- an unrecognised dropdown value, or no
+% device reported -- expectedFamily is '' and mismatch comes back false.
+%
+% That false is "not checked", NOT "the two agree", and the two are different
+% claims: one says a camera was verified against its image, the other says
+% nobody could look. Empty here makes cases.camera_mismatch NULL on the Node
+% side instead of a fabricated agreement.
+if ~isempty(cameraDetail)
+    out.cameraExpectedFamily = cameraDetail.expectedFamily;
+else
+    out.cameraExpectedFamily = '';
+end
 out.ruleEngineGrade  = ruleGrade;
 out.branchAgreement  = branchAgree;
 out.nvSuspicionScore = nvScore;

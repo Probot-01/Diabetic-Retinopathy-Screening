@@ -18,7 +18,7 @@ export const CentralProfileDrawer = ({
 
   // Form states initialized with userProfile
   const [formData, setFormData] = useState({
-    name: userProfile?.fullName || (isOphth ? 'Dr. Krrish Gadekar' : 'Krrish Gadekar'),
+    name: userProfile?.fullName || userProfile?.email || 'Signed-in user',
     email: userProfile?.email || 'krrishgadekar@gmail.com',
     phone: userProfile?.phone || '+91 98230 44821',
     officerId: userProfile?.officerId || (isOphth ? 'MCI-MH-2018-09421' : 'DHW-MH-PUN-042'),
@@ -35,7 +35,7 @@ export const CentralProfileDrawer = ({
   useEffect(() => {
     if (userProfile) {
       setFormData({
-        name: userProfile.fullName || (isOphth ? 'Dr. Krrish Gadekar' : 'Krrish Gadekar'),
+        name: userProfile.fullName || userProfile.email || 'Signed-in user',
         email: userProfile.email || 'krrishgadekar@gmail.com',
         phone: userProfile.phone || '+91 98230 44821',
         officerId: userProfile.officerId || (isOphth ? 'MCI-MH-2018-09421' : 'DHW-MH-PUN-042'),

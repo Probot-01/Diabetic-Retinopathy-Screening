@@ -67,6 +67,7 @@ async function toWire(tbl: string, row: any, me: string): Promise<WireRecord | n
         captureId: row.capture_id, patientId: row.patient_id, eye: row.eye, cameraDeviceId: row.camera_device_id,
         source: row.source, qualityStatus: row.quality_status, qualityReason: row.quality_reason,
         qualityScores: q ? { ...q.scores, compositeScore: q.compositeScore, preset: q.preset, analysedAt: q.analysedAt } : null,
+        qualityEngine: parse(row.quality_engine),
         retakeCount: row.retake_count, bestEffort: !!row.best_effort, capturedAt: row.captured_at,
         imageBytes: row.image_bytes, imageSha256: row.image_sha256, originDevice: row.origin_device || me,
       } };
@@ -171,10 +172,10 @@ async function applyOne(tx: Tx, r: WireRecord): Promise<boolean> {
       const img = imageFileFor(d.captureId);
       if (!img) throw new PeerError('image_missing', `image for ${d.captureId} not received`);
       await tx.runAsync(`INSERT INTO captures (capture_id, patient_id, eye, camera_device_id, source, image_path, image_bytes, quality_status,
-          quality_reason, quality_scores_json, retake_count, best_effort, captured_at, origin_device, image_sha256)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          quality_reason, quality_scores_json, quality_engine, retake_count, best_effort, captured_at, origin_device, image_sha256)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [d.captureId, d.patientId, d.eye ?? null, d.cameraDeviceId ?? 'unknown', d.source ?? 'desktop', img.uri, img.size,
-         d.qualityStatus, d.qualityReason ?? null, J(qualityFromWire(d)), d.retakeCount ?? 0, d.bestEffort ? 1 : 0, d.capturedAt,
+         d.qualityStatus, d.qualityReason ?? null, J(qualityFromWire(d)), J(d.qualityEngine), d.retakeCount ?? 0, d.bestEffort ? 1 : 0, d.capturedAt,
          d.originDevice, d.imageSha256 ?? null]);
       return true;
     }

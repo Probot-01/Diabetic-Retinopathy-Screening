@@ -111,6 +111,30 @@ async function main() {
     return 0;
   }
 
+  // ── IS THE FALLBACK EVEN ON? ─────────────────────────────────────────────
+  // It is currently switched OFF on purpose: its scores diverged from the
+  // compiled gate, so runQualityGateFallback throws instead of returning a
+  // verdict nobody measured. That is the right call -- see the long note in
+  // qualityGateFallback.js -- and it means there are two implementations to
+  // compare only when someone revives it.
+  //
+  // Reported as SKIP, not FAIL. A red line here should mean "the two
+  // implementations disagree", and a deliberate switch-off is not that. The
+  // check stays in the repo so that reviving the fallback cannot quietly
+  // bypass it.
+  try {
+    await runQualityGateFallback(fs.readFileSync(images[0]));
+  } catch (err) {
+    if (/switched off/i.test(err.message)) {
+      console.log('  SKIP  the JS fallback is switched off by design, so there is');
+      console.log('        no second implementation to compare against.');
+      console.log('        Reviving it means getting this to zero mismatches first.');
+      return 0;
+    }
+    // Any other error is a real failure and falls through to the loop below,
+    // which reports it per image.
+  }
+
   let compared = 0;
   for (const img of images) {
     let exe;

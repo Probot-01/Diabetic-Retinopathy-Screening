@@ -151,7 +151,8 @@ router.get('/cases/:captureRef/gradcam', requirePhcApiKey, async (req, res, next
         error: 'gradcam_not_available', message: 'No GradCAM overlay exists for this case.',
       });
     }
-    res.type('png').sendFile(require('path').resolve(own.gradcam_path));
+    // Decrypted here: media may be encrypted at rest (services/mediaCrypto.js).
+    res.type('png').send(require('../services/mediaCrypto').readEncryptedFile(own.gradcam_path));
   } catch (err) { next(err); }
 });
 

@@ -24,7 +24,19 @@ This prints a QR code containing `{ kind: 'netrasetu-pair', v: 1, deviceId, key,
 
 `POST /peer/pair` does the same over HTTP, but only from the PC itself (localhost) or for a logged-in PHC admin. It is never open to an anonymous LAN client, even while `LOCAL_AUTH_ENABLED=false`.
 
-Lost phone: `npm run peer -- revoke <deviceId>` locks it out immediately.
+Lost phone: `npm run peer -- revoke <deviceId>` locks it out immediately, or **DEVICES** in the PHC desktop app (*added 2026-09-27*).
+
+### Seeing and revoking devices from the PHC app
+
+`GET /peer/devices` (technician) lists every device ever paired with this PC as
+`[{ deviceId, name, createdAt, lastSeenAt, revokedAt }]`, and
+`POST /peer/devices/:id/revoke` (**PHC admin only**) cuts one off, answering `204`, or `404 device_not_found` for an id that is unknown *or already revoked*.
+
+Both endpoints existed from the start and no screen called either, so in practice a lost phone stayed paired until someone with a terminal ran the CLI — which is not a thing that happens in a clinic. The **DEVICES** screen in the PHC desktop app now calls them.
+
+Two properties that screen relies on, and that are the backend's to keep:
+- **A revoked device stays in the list** with `revokedAt` set. The record that a phone once held a key is what an incident review needs; deleting the row would be tidier and less honest.
+- **The admin check is the backend's.** The screen hides the button for a technician as a convenience. Measured: anonymous `401`, technician `200` on the list and `403 forbidden` on revoke, admin `204`.
 
 ## The sealed channel
 

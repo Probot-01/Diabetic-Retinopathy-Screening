@@ -4,7 +4,7 @@
 
 **Global naming rule:** SQL columns are `snake_case` (matches the schema.sql files). Every JSON payload over HTTP — every request body, every response body — is `camelCase`. The translation between the two happens in the route handler, never in the database layer and never in a frontend component. If you're generating a route handler, it reads snake_case from the DB and returns camelCase JSON; if you're generating a DB insert, it takes camelCase from the parsed request and writes snake_case columns.
 
-**Global ID rule:** all IDs are strings, never numbers, even where the DB uses an integer or UUID underneath. Locally-generated IDs (patients, captures) use the format `{PHC_CODE}-{base36 timestamp}-{4 random alphanumeric chars}`, e.g. `"PHC001-lz3k9f-a2x9"`. Centrally-generated IDs (cases, reviews, referrals) are standard UUIDv4 strings.
+**Global ID rule:** all IDs are strings, never numbers, even where the DB uses an integer or UUID underneath. Locally-generated IDs (patients, captures) use the format `{PHC_CODE}-{base36 timestamp}-{8 random alphanumeric chars}`, e.g. `"PHC001-mtuss3yg-a2x9k7qp"` (since 2026-09-24; IDs minted earlier keep their 4-character suffix and stay valid; the full rule is `docs/id-format-spec.md`). Centrally-generated IDs (cases, reviews, referrals) are standard UUIDv4 strings.
 
 **Global date rule:** every timestamp field is an ISO 8601 string in UTC, e.g. `"2026-09-06T14:32:00.000Z"`. Never epoch numbers, never locale-formatted strings.
 
@@ -18,6 +18,61 @@
 
 Kept because this file is the tie-breaker: when it changes, the code and both
 plans have to be re-checked against it, and a silent edit makes that impossible.
+
+**2026-09-27 (later still) — `GET /api/v1/cases/:caseId/report`: the PDF now carries its own provenance.** No request or response shape changed — the PDF's CONTENT changed, which this file records because the report is the artifact that leaves the system.
+- **The "Why:" line under the review tier now appears.** `generateReport.m` has rendered it from `tierReason` since it was written, and the backend never sent the field, so every PDF named the tier and never the reason for it. Regenerated reports now carry it; cached ones are regenerated when the case is re-graded, or on `force`.
+- **New section, "How this result was produced":** the classifier model build, and a table naming the engine behind each ML output with its `detail`. An output nobody recorded is omitted; a case with no provenance at all prints one line saying the record is missing, never a claim that some engine ran.
+- **A non-primary engine is called out in red** on the report itself, not only in the API. Same rule as the reviewer console: a `fallback: true` must be visible.
+- Both renderers were changed together — `generateReport.m` (MATLAB Report Generator) and `generateReportFigures.m` (core-MATLAB fallback). They are required to produce the same report; `verify_report_provenance.js` fails if they read different fields.
+
+**2026-09-27 (later) — `GET /api/v1/cases/:caseId` gains `cameraMismatch` and `cameraExpectedFamily`.** The reported-vs-detected camera cross-check has run on every case since Task 6.3 and reached no reader. It sets a tier floor, and a floor only writes `tierReason` when the tier would otherwise be A *and* the camera/site is still on probation — so a mismatch on a case the conformal set had already put in Tier B or C, or on any established camera, was a server log line and nothing else. Measured on a real case: `cameraMismatch: true` with a `tierReason` that never mentions the camera. Now stored (migration 0021) and served.
+- **`cameraMismatch` is three-state and the third state is the point.** `true` = the check ran and the two disagreed; `false` = the check ran and they agreed; **`null` = the check could not run**, because no device was reported or the reported device has no entry in the central device-association table. `classifyCameraFamily.m` returns `mismatch = false` in *both* the "agreed" and the "nothing to compare" case, and storing that as `false` would record that a camera was verified against its own image when nobody could look. Do not read `null` as agreement.
+- **`cameraExpectedFamily`** is the family the reported device implies — the other half of the comparison, in the same vocabulary as `cameraFamilyDetected`. `null` exactly when `cameraMismatch` is `null`. Without it, "mismatch" is an assertion the reader cannot inspect.
+- Both are `null` on any case graded before this date; that is "not recorded", as everywhere else.
+- **`cameraDeviceId` is not "one of the keys in `cameraPresets.json`"**, as this document said in two places. That file is the PHC quality gate's optics presets (`default`, `mobile_lens`) and has never held device ids. The accepted values are the ids in the PHC's own `captureOptions.js` `CAMERA_DEVICES`; whether a given one can be *cross-checked* depends on the central `calibrationProfiles.json` `deviceAssociations`. `generic_fundus` is deliberately not checkable (it names no single camera family) and is now listed with a `null` association so that stays a recorded decision rather than an omission.
+
+**2026-09-27 — Capture provenance documented; Case Detail now shows the whole of `engineProvenance`.** No shape changed; this closes a documentation gap and a UI gap.
+- **`GET /api/v1/cases/:caseId` carries `sourceFormat`, `dicomDeviceModel`, `cameraFamilyDetected`**, which have been served since migration 0016/Task 6.3 but were never written down here. They say what the image FILE reports about itself, deliberately kept apart from the technician's `captureMetadata.cameraDeviceReported`. `sourceFormat` is `"dicom" | "image"` — what the upload actually was, not its filename extension. `dicomDeviceModel` is manufacturer + model from the file's own tags, and is `null` on a plain image, which carries none. `cameraFamilyDetected` is one of `"desktop_tabletop" | "portable_handheld" | "smartphone_adapter" | "unknown"` (`classifyCameraFamily.m`; `"unknown"` means nothing scored well enough) and may also be `"disabled"` when camera calibration was switched off for that run. All three are `null` on a case that has not been graded. They are **not** a device identifier and must not be string-compared with `cameraDeviceReported`: a family is a coarser fact than a device. Where a reported-vs-detected disagreement matters, the backend already states it in `tierReason`.
+- **The full `engineProvenance` is now on Case Detail** (`ProvenancePanel`), replacing the lone quality-gate tile that stood in for all seven entries. `fallback: true` is called out at the top of the panel as well as on its row, per this document's "a UI should make a `true` visible". `detail` is printed verbatim and never parsed — which is what lets `engine: "matlab"` keep covering both `matlab -batch` and the compiled MATLAB executable, with only `detail` saying which. **Do not add a `"matlab-compiled"` engine value when the pipeline moves to the MATLAB Compiler**; the enum is fixed here, and the UI already reports the change through `detail`.
+- **`modelVersion` is shown** on Case Detail for the first time. It was in this document and in the response, and no screen rendered it, so a reviewer could not tell which classifier build graded the case in front of them.
+- Known gap, not fixed here: `cameraMismatch` is computed per case and logged, but it only reaches a reader through `tierReason`, and `tierReason` records it only while that camera/site is still on probation. Once probation clears, a reported-vs-detected disagreement is a server log line and nothing else. Surfacing it needs a stored field; it is not inferable in the client.
+
+**2026-09-27 (demo prep) — One definition of a silent PHC.** `GET /admin/system-health` counted a site silent after 48 h without any contact (`SILENT_PHC_HOURS`); `GET /admin/phcs` after 24 h without a *case* (`PHC_SILENT_HOURS`). The two screens could disagree on the same site. Both now use one rule, in `services/phcSilence.js`: no contact of any kind within `PHC_SILENT_HOURS` (default 24), or never. Changes: `thresholds.silentPhcHours` default 48 -> 24; `/admin/phcs` `status` is derived from contact, not from the last case; `/admin/phcs` items gain `lastContactAt`; env `SILENT_PHC_HOURS` is removed and ignored.
+
+Also: the `pendingCount` a PHC sends with a case now excludes the capture being uploaded (it is what remains queued behind it). It used to include it, so the last upload of a session left `phc_sites.pending_count = 1` and PHC Health showed a phantom backlog. Also: the UI shows every date and time in IST (Asia/Kolkata); Case detail shows `patientReference` as the case identifier and reads "NOT COMPUTED" for `uncertaintyScore`/consistency when null; the Resources page says "Simulation results not yet generated" until the Simulink output exists.
+
+**2026-09-27 (later) — `GET /api/v1/admin/phcs`.** Lists every PHC site with its recent activity (district_admin). It gives the PHC Health page a real data source; that table used to say "no live data source yet". Adds nullable `phc_sites.phc_code` and `phc_sites.district` (migration 0020); both are reported as `null` until someone records them. New optional env `PHC_SILENT_HOURS` (default 24).
+
+**2026-09-27 — Final capture flow order (desktop and mobile), decided by Tanuj.** Registration + patient questionnaire (every question answered, no skip, consent confirmed) → capture → local quality gate → capture-metadata questionnaire → local queue → sync. This is a note on `system-design-v4.md` §8.1, which lists the patient questionnaire after the gate: both front-ends collect it at registration and store it per patient, then attach it to each capture. No endpoint or field changed.
+
+**2026-09-27 — Expo mobile app sends `qualityGateEngine: "js-device"`; peer sync carries it.** No endpoint or shape changed. The mobile app now sends the optional `qualityGateEngine` (`{ "engine": "js-device", "fallback": false, "detail": "…" }`) on `/cases`, `/cases/summary` and the chunk init, so a mobile case's `engineProvenance.qualityGate` is `js-device`, not `null`. The desktop↔phone peer wire `capture` record gains an optional `qualityEngine` (the same entry), applied by both sides, so a case uploaded by the other device keeps the engine that really gated it. A capture with no recorded engine stays `null` ("not recorded"). Mobile also now treats only `201`, or `200` + `duplicate: true` with a `caseId`, as acceptance (any other 2xx is a failure, never "synced").
+
+**2026-09-27 — Reviewer and admin flows, verified against real cases.**
+- **Lesion evidence is two families, red and bright.** `lesionCounts.microaneurysms` and `hemorrhages` are the breakdown of the red family, and are real numbers under M5 v2 (`null` under v1). `hardExudates` is the bright family. **`softExudates` is deprecated:** it stays in the response for wire compatibility, is always `null`, and no UI renders it, because nothing detects cotton-wool spots. It will be removed once the mobile app stops reading it.
+- **`lesionCounts.detail.redTotal` is now the sum of `redPerQuadrant`.** It used to be the older whole-mask count, which under M5 v2 differed from the quadrant counts the rule engine and the evidence text use (for example 15 against 18).
+- **`GET /admin/dashboard` gains** `casesThisWeek` (last 7 days), `totalCasesProcessed` (graded), `overrideRate` (0–1, or `null` with no reviews), `avgConfidenceScore` (0–1, or `null`), `drGradeDistribution` (`[{ grade, label, count, percentage }]` for the classifier's grade, or `null` with nothing graded) and `weeklyTrend` (`[{ week, cases, referrals }]`, last six weeks). Additive. Not provided, because central cannot know them: images rejected by the PHC quality gate, and model accuracy.
+- **`GET /admin/referrals` items and the `PATCH /referrals/:id` response gain** `phcName` and `drGrade` (the reviewer's corrected grade when there is one, else the classifier's). Additive.
+- **`manual_follow_up` is also set when no SMS provider is configured** (`smsStatus: "not_configured"`). The patient was not told, so someone has to phone them. It was left in `referred` before. `dry_run` is unchanged.
+- **`GET /cases/:caseId/report` 502** now carries a short message. The MATLAB error is in the server log only. Without the MATLAB Report Generator product on the server, the report is rendered by the core-MATLAB fallback instead of failing.
+
+**2026-09-26 (later) — Quality-gate engine value `js-device`.** `qualityGateEngine` and `engineProvenance.qualityGate` may now also be `"js-device"`. It means the mobile app's on-device TypeScript port of `qualityGateMain.m`, which is that client's primary gate, so `fallback` is `false`. It is valid only for the quality gate. Classifier, segmentation and rule-engine entries stay `"matlab" | "python" | "js-fallback"`. The backend accepts it now; the mobile app starts sending it separately.
+
+**2026-09-26 — Engine provenance, component health, no silent segmentation fallback.**
+- **`GET /api/v1/cases/:caseId` gains `engineProvenance`**: which engine (`matlab` | `python` | `js-fallback`) produced the classifier grade, each segmentation model, the rule engine and the PHC quality gate. The shape and its null rules are under the case-detail section below. Additive. *(Shown on Case Detail since 2026-09-27.)*
+- **`POST /api/v1/cases`, `/cases/summary` and the chunk upload accept an optional `qualityGateEngine`**: a JSON-stringified engine entry for the PHC's quality gate. A malformed value returns `400 invalid_field`. If it is absent, it is stored as "not recorded". The PHC desktop backend sends it from this date. The Expo mobile app does not send it yet.
+- **`GET /health` gains `components`**: `db`, `queue`, `matlabSession` and `python`, reported separately. The top-level `status` is still `"ok"` whenever the server answers, because PHC sync and the mobile app treat `/health` as a reachability heartbeat. Monitors should read `components`.
+- **New `failureCode` value `matlab_segmentation_failed`**: segmentation's MATLAB engine failed and `SEG_ALLOW_PYTHON_FALLBACK` is not set. The case is retried, then marked `error`. It is no longer silently re-run on PyTorch, and no longer silently graded on the classifier alone.
+
+**2026-09-26 — PHC capture → sync → result flow (Local API).** Found by running the whole flow against real services; each change is additive unless marked.
+
+- **Fixed (behaviour): a capture is uploaded only after both questionnaires are recorded.** It used to be queued at the quality gate and uploaded within one sync cycle, so central graded cases with `questionnaireData` and `captureMetadata` NULL. `pendingCount` now counts only rows ready to upload; new `awaitingFormsCount` counts the rest.
+- **Fixed (behaviour): "synced" now means central accepted the case** (201, or 200 + `duplicate: true`, with a `caseId`). Any other 2xx used to mark the capture synced.
+- **`GET /sync/status` gains `awaitingFormsCount` and `lastError`**; a refusal is recorded and retried with backoff instead of retried silently and forever.
+- **`GET /captures`: `result_pending` and `result_delivered` are now reachable**, driven by polling central's status endpoint. New per-row fields: `qualityStatus`, `qualityReason`, `formsComplete`, `centralStatus`, `syncError`, `uploadProgress`.
+- **`POST /captures` response gains `qualityGateEngine`** (which engine ran the gate). The `503 quality_gate_failed` body gains `captureId`.
+- **New `POST /captures/:captureId/quality-check`**: re-run the gate on a saved, unchecked capture (what the 503 text always promised).
+- **The disabled JS quality-gate tier no longer invents a verdict.** It answered `retake` / `MATLAB_UNAVAILABLE` for every image; it now throws, which is reported as `503 quality_gate_failed`.
+- **Global ID rule corrected to the 8-character suffix** (`docs/id-format-spec.md`, 2026-09-24); the contract text still said 4.
 
 **2026-09-24 — PHC-readable report.** Added `GET /api/v1/phc/cases/:captureRef/report` and `GET /api/v1/phc/cases/:captureRef/gradcam` (PHC key). Until now nothing a PHC is allowed to call returned a grade, so a PHC front-end had no honest way to show a result. First consumer: the Expo mobile app.
 
@@ -126,26 +181,32 @@ Duplicate check at registration, against **this PHC's own** records, so it works
 At least one of `name` or `phone` is required; `age` only boosts. Errors: `400 invalid_field`.
 
 ### `POST /captures`
-Request: `multipart/form-data` with fields `patientId` (string), `image` (file), `cameraDeviceId` (string — one of the keys in `cameraPresets.json`, or `"unknown"`).
+Request: `multipart/form-data` with fields `patientId` (string), `image` (file), `cameraDeviceId` (string — one of the ids in the PHC front-end's `captureOptions.js` `CAMERA_DEVICES`, or `"unknown"`; *corrected 2026-09-27: this said `cameraPresets.json`, which holds optics presets, not device ids*).
 Response `201`:
 ```json
 {
-  "captureId": "PHC001-lz4a2b-c7f1",
-  "patientId": "PHC001-lz3k9f-a2x9",
+  "captureId": "PHC001-mtuss3yg-a2x9k7qp",
+  "patientId": "PHC001-mtuss2ab-k4z8m1cd",
   "qualityStatus": "pass",
   "qualityReason": null,
   "retakeCount": 0,
-  "capturedAt": "2026-09-06T09:05:00.000Z"
+  "capturedAt": "2026-09-06T09:05:00.000Z",
+  "qualityGateEngine": { "engine": "matlab", "fallback": false, "detail": "qualityGateMain.m via matlab -batch" }
 }
 ```
 `qualityStatus` is exactly one of `"pass" | "retake" | "borderline"`.
+
+*(2026-09-26)* **`qualityGateEngine`** says which engine produced this verdict: `{ "engine": "matlab" | "js-fallback", "fallback": boolean, "detail": string }`. It is never guessed: it is `null` only for a capture gated before the engine was recorded. The screen must show it. `"matlab"` covers both the compiled executable and `matlab -batch` (`detail` says which). `"js-fallback"` can only appear with `QUALITY_GATE_ALLOW_FALLBACK=1`, and the JS tier is currently switched off in code, so it does not answer today (see the 503 below).
 `qualityReason` is `null` when `qualityStatus` is `"pass"`; otherwise exactly one of: `"blur" | "low_illumination" | "insufficient_fov" | "glare" | "motion_artifact" | "eyelash_occlusion"`. These six strings are fixed — the frontend's `QualityResultPanel.jsx` maps each one to its own human-readable message, so the quality gate must return one of these exact values, never free text.
 
 `retakeCount` counts prior failed attempts **for this patient on the current UTC day**. It answers "which attempt is this, in this sitting" — a patient screened again months later starts at 0 rather than inheriting an old count.
 
 Errors: `400 patient_id_required`, `400 image_required`, `400 invalid_image_type`, `404 patient_not_found`, `413 image_too_large` (25 MB), `503 quality_gate_failed`.
 
-`503 quality_gate_failed` means the image **was saved** and the capture row exists, but the quality check could not run (typically MATLAB unavailable). The capture is recoverable and can be re-checked without recalling the patient — do not present it to the technician as a lost capture. The row stays in an internal `pending` state that is never returned as a `qualityStatus`.
+`503 quality_gate_failed` means the image **was saved** and the capture row exists, but the quality check could not run (typically MATLAB unavailable). The capture is recoverable and can be re-checked without recalling the patient — do not present it to the technician as a lost capture. The row stays in an internal `pending` state that is never returned as a `qualityStatus`. *(2026-09-26)* The error body also carries **`captureId`**, the id to re-check it with (below). No verdict is ever invented when the gate cannot run: the JS tier used to answer every image with `retake` / `MATLAB_UNAVAILABLE`, which is not one of the six reasons and told technicians to retake photographs that had never been checked.
+
+### `POST /captures/:captureId/quality-check`  *(added 2026-09-26)*
+Re-run the quality gate on a capture that was saved but not checked (the `503 quality_gate_failed` case), without taking the photograph again. No request body. Response `200`: the same body as `POST /captures`. A capture that already has a verdict is returned as it is, not re-gated. Errors: `404 capture_not_found`, `409 quality_gate_busy` (already being checked), `503 quality_gate_failed` (still unavailable; same `captureId`).
 
 ### `POST /captures/:captureId/questionnaire` (patient symptom + risk)
 Request:
@@ -186,11 +247,15 @@ Request:
 Response `201`: `{ "responseId": "string", "captureId": "string" }`
 
 ### `GET /sync/status`
-Response `200`: `{ "online": true, "pendingCount": 3, "lastSyncAttempt": "2026-09-06T09:10:00.000Z" }` — `lastSyncAttempt` is `null` if no attempt has ever been made.
+Response `200`: `{ "online": true, "pendingCount": 3, "awaitingFormsCount": 1, "lastSyncAttempt": "2026-09-06T09:10:00.000Z", "lastError": null }` — `lastSyncAttempt` is `null` if no attempt has ever been made.
 
 `online` reflects the last actual heartbeat to the central server, held in memory rather than persisted: "is the network up right now" is true of the running process at this moment, and a restarted server must not report a state it has never observed. **Until the sync manager (Task 3.4) exists, this is always `false` with `lastSyncAttempt: null`** — nothing has tried to reach the server yet, so that is the honest answer rather than a placeholder. The technician uses this indicator to decide whether the patient can wait for a result, so an optimistic `true` that nothing verified is worse than `false`.
 
-`pendingCount` counts `sync_queue` rows awaiting upload. Only captures whose quality status is `pass` or `borderline` are queued: a `retake` is about to be reshot, and uploading it would spend scarce rural bandwidth on an image that is already being replaced.
+`pendingCount` counts `sync_queue` rows **ready to upload and not yet accepted by central**. Only captures whose quality status is `pass` or `borderline` are queued: a `retake` is about to be reshot, and uploading it would spend scarce rural bandwidth on an image that is already being replaced.
+
+*(2026-09-26)* **A capture is uploaded only once BOTH questionnaires are recorded** (`POST /captures/:captureId/questionnaire` and `.../capture-metadata`). Before this it was queued at the quality gate and the sync loop usually won the race against the technician: central stored and graded the case with no questionnaires, and the answers recorded a minute later were never sent. `awaitingFormsCount` counts the passed captures still waiting for a questionnaire; they are not in `pendingCount`. **`lastError`** is `null`, or `{ "captureId", "kind": "network" | "rejected" | "server", "message", "at" }`: the most recent reason a capture is still pending, in central's own words when it answered (`rejected` = central refused it with a 4xx; `server` = a 5xx, or a 2xx that was not an acceptance; `network` = no answer). A refusal is retried with a doubling delay (30 s up to 15 min) rather than resending the image every cycle; a dropped connection is retried at once.
+
+**"Synced" means central ACCEPTED the case** (design doc §4.1, §4.4): `201` from `POST /api/v1/cases` (or from `chunks/complete`), or `200` with `"duplicate": true` (central already had the capture), and in both cases a `caseId`. Any other answer, however 2xx, leaves the capture pending.
 
 ### `GET /captures` (for the Local Queue table)
 Response `200`: array of
@@ -200,21 +265,52 @@ Response `200`: array of
   "patientId": "PHC001-lz3k9f-a2x9",
   "patientName": "Sunita Devi",
   "status": "quality_passed",
-  "capturedAt": "2026-09-06T09:05:00.000Z"
+  "capturedAt": "2026-09-06T09:05:00.000Z",
+  "qualityStatus": "borderline",
+  "qualityReason": null,
+  "formsComplete": true,
+  "centralStatus": null,
+  "syncError": null,
+  "uploadProgress": null
 }
 ```
 `status` ∈ `"captured" | "quality_passed" | "synced" | "result_pending" | "result_delivered"`.
 
+*(2026-09-26)* The fields after `capturedAt` are additive detail behind `status`. `qualityStatus` is the capture's quality verdict (`null` while the gate has not run), `qualityReason` its reason. `formsComplete` is whether both questionnaires are recorded. `centralStatus` is what central last reported about the case (`"awaiting_image" | "processing" | "graded" | "error"`) or `null`. `syncError` is `null` or `{ "kind", "message", "attempts", "nextAttemptAt" }` (same kinds as `/sync/status`). `uploadProgress` is `null` or `{ "sent", "total" }` for a chunked upload in flight or interrupted.
+
 This is a **lifecycle** vocabulary and is not the same thing as `qualityStatus`: `qualityStatus` answers "was the photo usable", `status` answers "how far along is this case". Do not map one onto the other.
 
-Only the first three are currently reachable. `result_pending` and `result_delivered` require knowing what the central server did with a case, and nothing local tracks that yet — the sync manager only records that the upload succeeded. A case awaiting a result therefore reports `synced`. Do **not** infer the later two from elapsed time; a fabricated status on a clinical screen is worse than a coarse one.
+*(2026-09-26)* All five are now reachable, and the last three come from **what central reports**, never from elapsed time: after central accepts a case the sync manager polls `GET /api/v1/cases/:caseId/status` until it is `graded` or `error`. `synced` = accepted, no report on it yet; `result_pending` = central reports `awaiting_image` or `processing`; `result_delivered` = central reports `graded` (the grade itself is held at central; this Local API does not carry it). A case central reports as `error` stays **`synced`** with `centralStatus: "error"`: it was accepted but has no result, and must never be shown as one. Do **not** infer any of these from elapsed time; a fabricated status on a clinical screen is worse than a coarse one.
 
 ---
 
 ## Central API — `central-system/backend`, base URL `http://localhost:5000`
 
 ### `GET /health`
-Response `200`: `{ "status": "ok" }`
+*(components added 2026-09-26)* Unauthenticated. Response `200`:
+```json
+{
+  "status": "ok",
+  "components": {
+    "db":            { "status": "ok" | "down", "latencyMs": 3, "error": null },
+    "queue":         { "status": "ok" | "stopped", "queued": 0, "inflight": 1, "retrying": 0,
+                       "processed": 12, "failed": 0, "concurrency": 1, "running": true },
+    "matlabSession": { "status": "healthy" | "restarting" | "down" | "disabled",
+                       "heartbeatFresh": true, "lastHeartbeatAt": "…|null",
+                       "restartsInWindow": 0, "lastError": null },
+    "python":        { "status": "ok" | "unavailable" | "unknown", "executable": "…",
+                       "version": "3.11.16", "missingModules": [], "error": null, "checkedAt": "…|null",
+                       "segWorker": { "status": "healthy" | "restarting" | "down" | "disabled",
+                                      "heartbeatFresh": true, "lastHeartbeatAt": "…|null",
+                                      "restartsInWindow": 0, "lastError": null } }
+  },
+  "generatedAt": "…"
+}
+```
+- **`status` is always `"ok"` when the server answers.** It means "reachable", because PHC sync and the mobile app gate every upload on it. A down database or MATLAB session shows up under `components`, not here. A case that arrives while MATLAB is down is still stored, then graded or visibly failed by the queue.
+- **`db`:** `SELECT 1`, capped at 1 s.
+- **`matlabSession.status`:** the supervisor's value, the same one `GET /admin/system-health` reports. `heartbeatFresh` is the live reading, which is still meaningful when the supervisor is `disabled`.
+- **`python`:** the interpreter plus the modules the pipeline imports (`numpy`, `cv2`, `scipy`, `torch`, `timm`, `segmentation_models_pytorch`). The probe is cached and refreshed in the background at most once a minute, so `checkedAt` says how old the answer is. `"unknown"` means the first probe has not finished yet.
 
 ### `POST /api/v1/cases`
 Request: `multipart/form-data` with fields `patientId`, `phcId`, `captureIdRef`, `cameraDeviceId` (all strings), `image` (file), `questionnaireData` (JSON-stringified payload matching the patient questionnaire shape above), `captureMetadata` (JSON-stringified payload matching the capture-metadata shape above).
@@ -236,7 +332,9 @@ Response `201`: `{ "caseId": "a1b2c3d4-...", "receivedAt": "2026-09-06T09:15:00.
 
 A `201` means the case was **stored**, not that it was graded. **Since Task 8.3 grading is queued, so a case is always `"processing"` when the POST returns** — clients must poll `GET /api/v1/cases/:caseId/status` and must not treat the `201` as meaning a grade exists. If grading later fails, the case stays stored and its status becomes `"error"`.
 
-Errors: `400 image_required`, `400 invalid_image_type`, `400 invalid_json` (malformed `questionnaireData`/`captureMetadata`), `404 patient_not_found` (unknown patient and no demographics supplied), `413 image_too_large` (limit 25 MB).
+Optional, added 2026-09-26: `qualityGateEngine`, a JSON-stringified engine entry (`{ "engine": "matlab" | "python" | "js-fallback" | "js-device", "fallback": boolean, "detail": string|null }`; `js-device` = the mobile on-device gate) naming the engine that ran the PHC's quality gate on this capture. It is served back as `engineProvenance.qualityGate` on the case detail. The same optional field is accepted by `/cases/summary` and the chunk upload. If it is absent, it is stored as "not recorded", never assumed.
+
+Errors: `400 image_required`, `400 invalid_image_type`, `400 invalid_json` (malformed `questionnaireData`/`captureMetadata`/`qualityGateEngine`), `400 invalid_field` (`qualityGateEngine` is valid JSON but not an engine entry), `404 patient_not_found` (unknown patient and no demographics supplied), `413 image_too_large` (limit 25 MB).
 
 ### `POST /api/v1/cases/summary`  *(added 2026-09-20, design doc §10.1)*
 JSON body with the same fields as `POST /api/v1/cases` minus `image`. `captureIdRef` is **required** here: it is what the later image upload matches on.
@@ -259,7 +357,7 @@ Response `200`: `{ "caseId": "string", "status": "processing" | "graded" | "erro
 
 `"processing"` covers both *waiting for a worker* and *being graded*. That is deliberate: from outside they are the same fact — the answer is not ready, keep polling — and a fourth enum value would expose an internal distinction no client can act on. Both `"graded"` and `"error"` are terminal; nothing leaves either state without a new submission.
 
-**How long to expect:** about 21 s from upload to `"graded"` on the development machine, plus however long the case waited for a free worker — and roughly 40 s if the persistent MATLAB session or the segmentation worker is down, since the backend then falls back to starting them per case. Design a UI that polls, not one that blocks, and do not treat 60 s as abnormal.
+**How long to expect:** about 21 s from upload to `"graded"` on the development machine, plus however long the case waited for a free worker. It takes roughly 40 s if the Python segmentation worker is down, because the backend then starts segmentation per case. *(Corrected 2026-09-26)* If the persistent **MATLAB session** is down, the case does not quietly switch engines. It is retried, and if MATLAB is still down it ends in `"error"` (`failureCode` `matlab_session_unavailable` or `matlab_segmentation_failed`). The supervisor restarts the session and raises a System Health alert if that fails. Design a UI that polls, not one that blocks, and do not treat 60 s as abnormal.
 
 ### Chunked / resumable upload — `POST|GET /api/v1/cases/:captureRef/chunks…`  *(Task 8.2)*
 
@@ -365,9 +463,33 @@ That is deliberate and is not a placeholder. It never says "0 microaneurysms" �
 
 ### `GET /api/v1/cases/:caseId`: fields added 2026-09-20 (failures)
 - `status`: the case's own status (`processing` | `awaiting_image` | `graded` | `error`). It was missing from this response, which meant a failed case and a still-grading one looked identical: every ML field is `null` on both.
-- `failureCode`: why grading gave up, on an `error` case — e.g. `matlab_unavailable`, `python_unavailable`, `image_not_found`. `null` on every case that has not failed, and `not_recorded` never appears here (that grouping label is the admin health screen's, for the 62 cases that failed before the reason was stored).
+- `failureCode`: why grading gave up, on an `error` case — e.g. `matlab_unavailable`, `matlab_session_unavailable`, `matlab_segmentation_failed` *(2026-09-26)*, `python_unavailable`, `image_not_found`. `null` on every case that has not failed, and `not_recorded` never appears here (that grouping label is the admin health screen's, for the 62 cases that failed before the reason was stored).
 - `failedAt`: ISO-8601 timestamp of the moment it gave up, distinct from `receivedAt`.
 - The failure MESSAGE is deliberately not in this response. It can quote internal paths and library errors, so it is served only by `GET /admin/system-health`, to an admin.
+
+### `GET /api/v1/cases/:caseId`: field added 2026-09-26 (engine provenance)
+`engineProvenance`: which engine produced each ML output of this case. The standing rule is that every case records it and no engine switch is silent.
+```json
+"engineProvenance": {
+  "classifier":   { "engine": "matlab", "fallback": false,
+                    "detail": "MATLAB session (branchAInferMatlab.m); input tensor preprocessed in Python (preprocessBranchATensor.py)" },
+  "segmentation": {
+    "vessel":       { "engine": "matlab", "fallback": false, "detail": "MATLAB session forward pass (vessel_unet_v1)" },
+    "localization": { "engine": "matlab", "fallback": false, "detail": "MATLAB session forward pass (localization_v1)" },
+    "hardExudate":  { "engine": "matlab", "fallback": false, "detail": "MATLAB session forward pass (bright_lesion_unet_v1)" },
+    "redLesion":    { "engine": "python", "fallback": false, "detail": "PyTorch; not converted for MATLAB serving" }
+  },
+  "ruleEngine":   { "engine": "matlab", "fallback": false, "detail": "runCasePipeline.m in the persistent MATLAB session" },
+  "qualityGate":  { "engine": "matlab", "fallback": false, "detail": "qualityGateMain.m via matlab -batch" }
+}
+```
+- **Each entry** is `{ engine, fallback, detail }`, or `null`. `engine` is one of `"matlab" | "python" | "js-fallback"` and nothing else, except that `qualityGate` may also be `"js-device"` (the mobile on-device gate; *2026-09-26*). `detail` is free text for a human, at most 300 characters. Do not parse it.
+- **`fallback: true`** means the output came from a non-primary engine because an explicit env flag allowed it: `MATLAB_ALLOW_FALLBACK`, `SEG_ALLOW_PYTHON_FALLBACK` or `QUALITY_GATE_ALLOW_FALLBACK`. Without the flag there is no fallback, and the case fails or is retried instead. A UI should make a `true` visible.
+- **`ruleEngine`** covers the whole per-case MATLAB call: the rule engine, branch agreement, camera check, NV score, lesion-attention score and evidence text. When the session could not take the request, `detail` says it ran through `matlab -batch`. The engine is still `matlab`.
+- **`null` means NOT RECORDED**, and is never a guess from the server's current configuration. The object itself is always present with all four keys.
+  - `classifier`, `segmentation` and `ruleEngine` are `null` on a case not graded yet, and on one graded before 2026-09-26.
+  - `segmentation` is `null` when segmentation did not run for this case. That is the same fact `lesionCounts: null` states. A single model inside it is `null` when segmentation did not report that model.
+  - `qualityGate` is `null` when the capturing client did not report it: older PHC builds, the mobile app for now, and captures replicated between peer devices.
 
 ### `GET /api/v1/admin/system-health`: fields added 2026-09-20
 - `failedCases`: cases that gave up, grouped by `failureCode`, each with `count`, `lastFailedAt`, an `exampleReason` and an `exampleCaseId`. Separate from `stuckJobs` on purpose — a stuck case may still recover on its own, a failed one needs a person.
@@ -572,16 +694,31 @@ District admin. One call returns four checks: silent PHCs, stuck grading jobs, t
   "matlabSession":   { "status", "lastHeartbeatAt", "restartsInWindow", "lastError" },
   "alerts":          [ { "kind": "matlab_session_down", "subject", "message",
                          "firstSeenAt", "lastSeenAt", "occurrences" } ],
-  "thresholds":      { "silentPhcHours": 48, "stuckJobMinutes": 15, "unreviewedCaseHours": 48 },
+  "thresholds":      { "silentPhcHours": 24, "stuckJobMinutes": 15, "unreviewedCaseHours": 48 },
   "generatedAt": "…"
 }
 ```
 
 **The four checks:**
-- **`silentPhcs`:** a PHC appears when it has had no contact of any kind (full case, summary packet or chunk) for `silentPhcHours`, or has never made contact (`lastContactAt: null`).
+- **`silentPhcs`:** a PHC appears when it has had no contact of any kind (full case, summary packet or chunk) for `silentPhcHours` (env `PHC_SILENT_HOURS`, default 24), or has never made contact (`lastContactAt: null`). This is the same rule `GET /admin/phcs` uses for `status`, so the System Health count and the number of `"silent"` rows on the PHC Health page are always equal.
 - **`stuckJobs`:** a case appears when it is still processing long after it arrived. The automatic watchdog re-queues such cases up to 3 times; once `autoRecoveryExhausted` is `true`, it needs a human.
 - **`matlabSessionStatus`:** one of `"healthy" | "restarting" | "down" | "disabled"`. The supervisor restarts the session itself. It reports `"down"`, and raises an alert, when restarting has not worked.
 - **`unreviewedCases`:** referable cases that have never been reviewed, older than `unreviewedCaseHours`.
+
+### `GET /api/v1/admin/phcs`  *(added 2026-09-27)*
+District admin (401 with no session, 403 for any other role, like every `/admin` route). One item per row of `phc_sites`, ordered by name; `[]` when no site is registered.
+```json
+[ { "phcId": "7b395269-…", "phcCode": "PHC001", "name": "PHC Kharadi", "district": null,
+    "lastSyncAt": "2026-09-26T11:39:54.594Z", "lastContactAt": "2026-09-26T11:41:02.114Z",
+    "casesLast24h": 8, "pendingOrFailedCount": 1, "status": "active" } ]
+```
+- **`phcCode`, `district`:** `null` when not recorded. Nothing is guessed.
+- **`lastSyncAt`:** the latest case **central received** from that site, or `null` if it has never sent one. It is not `phc_sites.last_sync_at`, which keeps its own narrower meaning (full-sync completion, used by `GET /phc/:phcId/sync-status`).
+- **`casesLast24h`:** cases received from the site in the last 24 hours.
+- **`pendingOrFailedCount`:** what the PHC last reported as still queued (`pending_count`, accurate only as of its last contact) **plus** the site's cases whose grading failed here (status `error`).
+- **`lastContactAt`:** `phc_sites.last_contact_at`, any authenticated contact from the site, or `null` if never.
+- **`status`:** `"silent"` when `lastContactAt` is `null` or older than `PHC_SILENT_HOURS` (default 24), otherwise `"active"`. One definition: it is exactly the rule behind `silentPhcs` and `thresholds.silentPhcHours` in `GET /admin/system-health`.
+- **The API key and its hash are never returned.**
 
 ### `GET /api/v1/phc/:phcId/sync-status`
 *(2026-09-20)* Response also includes `lastContactAt` (`string|null`).

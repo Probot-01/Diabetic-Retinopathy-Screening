@@ -45,7 +45,7 @@ const toWire = {
   captures: (r) => ({
     captureId: r.capture_id, patientId: r.patient_id, eye: r.eye ?? null, cameraDeviceId: r.camera_device_id,
     source: r.source || 'desktop', qualityStatus: r.quality_status, qualityReason: r.quality_reason,
-    qualityScores: parse(r.quality_scores), retakeCount: r.retake_count, bestEffort: !!r.best_effort,
+    qualityScores: parse(r.quality_scores), qualityEngine: parse(r.quality_engine), retakeCount: r.retake_count, bestEffort: !!r.best_effort,
     capturedAt: r.captured_at, imageBytes: r.image_bytes ?? null, imageSha256: r.image_sha256 ?? null,
     originDevice: r.origin_device || db.deviceId(),
   }),
@@ -135,10 +135,10 @@ function applyCapture(c) {
     throw Object.assign(new Error(`image for ${c.captureId} must be sent before the capture record`), { code: 'image_missing' });
   }
   db.prepare(`INSERT INTO captures (capture_id, patient_id, camera_device_id, image_path, quality_status, quality_reason,
-                retake_count, captured_at, quality_scores, eye, source, best_effort, image_bytes, image_sha256, origin_device)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                retake_count, captured_at, quality_scores, quality_engine, eye, source, best_effort, image_bytes, image_sha256, origin_device)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(c.captureId, c.patientId, c.cameraDeviceId, imagePath, c.qualityStatus, c.qualityReason, c.retakeCount ?? 0,
-      c.capturedAt, J(c.qualityScores), c.eye, c.source, c.bestEffort ? 1 : 0, c.imageBytes, c.imageSha256, c.originDevice);
+      c.capturedAt, J(c.qualityScores), J(c.qualityEngine), c.eye, c.source, c.bestEffort ? 1 : 0, c.imageBytes, c.imageSha256, c.originDevice);
   return true;
 }
 

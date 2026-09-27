@@ -28,7 +28,9 @@ const { execFile } = require('child_process');
 
 const pool       = require('../db/pgClient');
 const mediaPaths = require('./mediaPaths');
+const mediaCrypto = require('./mediaCrypto');
 const matlabSession = require('./matlabSessionClient');
+const engineProvenance = require('./engineProvenance');
 
 const ML_ROOT     = path.resolve(__dirname, '..', 'ml-pipeline');
 const MATLAB_EXE  = process.env.MATLAB_EXECUTABLE || 'matlab';
@@ -65,8 +67,9 @@ async function loadReportInput(caseId) {
            c.eye_laterality_detected, c.eye_laterality_reported,
            p.patient_reference, p.age,
            site.name AS phc_name,
-           g.dr_grade_cnn, g.confidence_score, g.conformal_tier,
+           g.dr_grade_cnn, g.confidence_score, g.conformal_tier, g.tier_reason,
            g.dr_grade_rule_engine, g.branch_agreement, g.graded_at,
+           g.model_version, g.engine_provenance, c.quality_gate_engine,
            s.lesion_counts, s.nv_suspicion_score,
            e.gradcam_path, e.evidence_summary_text, e.rationale_report_path
     FROM cases c
@@ -80,7 +83,66 @@ async function loadReportInput(caseId) {
   return rows[0] || null;
 }
 
+/**
+ * provenanceRows(row) -- engine provenance flattened for the PDF.
+ *
+ * Returns uniform { label, engine, fallback, detail } rows, in reading order,
+ * and [] when nothing was recorded. Flattened HERE rather than in MATLAB for
+ * two reasons: jsondecode turns a uniform array of objects into a struct array
+ * the renderer can just loop over, where a nested object with optional nulls
+ * becomes a shape it would have to interrogate field by field; and the
+ * contract's shape then lives in one place (services/engineProvenance.js)
+ * instead of being re-derived in a .m file.
+ *
+ * A NOT-RECORDED output is omitted rather than printed as a blank row: the
+ * screen can afford to say "not recorded" next to a label, a one-page clinical
+ * document should not spend lines on outputs nobody recorded. When NOTHING was
+ * recorded the caller prints one honest line saying exactly that.
+ */
+const PROVENANCE_LABELS = [
+  ['classifier', 'Image classifier (Branch A)'],
+  ['ruleEngine', 'Rule engine (Branch B)'],
+  ['qualityGate', 'Quality gate (at the PHC)'],
+];
+const SEGMENTATION_LABELS = [
+  ['vessel', 'Segmentation - vessel'],
+  ['localization', 'Segmentation - localization'],
+  ['hardExudate', 'Segmentation - hard exudate'],
+  ['redLesion', 'Segmentation - red lesion'],
+];
+
+function provenanceRows(row) {
+  const p = engineProvenance.toContractShape(row.engine_provenance, row.quality_gate_engine);
+  const out = [];
+  const push = (label, e) => {
+    if (!e) return;
+    out.push({
+      label,
+      engine: e.engine,
+      fallback: e.fallback === true,
+      detail: e.detail || '',
+    });
+  };
+  push(PROVENANCE_LABELS[0][1], p.classifier);
+  push(PROVENANCE_LABELS[1][1], p.ruleEngine);
+  for (const [key, label] of SEGMENTATION_LABELS) push(label, p.segmentation?.[key]);
+  push(PROVENANCE_LABELS[2][1], p.qualityGate);
+  return out;
+}
+
+// MATLAB reads the image and Grad-CAM by path and cannot decrypt, so it gets
+// temp plaintext copies (mediaCrypto.withPlaintextCopy); the PDF it writes is
+// encrypted as soon as it exists.
 async function render(caseId, row) {
+  const gradcam = row.gradcam_path && fs.existsSync(row.gradcam_path) ? row.gradcam_path : null;
+  const out = await mediaCrypto.withPlaintextCopy(row.image_path || null, (imagePath) =>
+    mediaCrypto.withPlaintextCopy(gradcam, (gradcamPath) =>
+      renderPlain(caseId, { ...row, image_path: imagePath, gradcam_path: gradcamPath })));
+  mediaCrypto.encryptFileInPlace(out);
+  return out;
+}
+
+async function renderPlain(caseId, row) {
   const outPath = path.join(mediaPaths.caseDir(caseId), 'report.pdf');
   const input = {
     caseId,
@@ -103,6 +165,17 @@ async function render(caseId, row) {
     lesionCounts: row.lesion_counts,
     nvSuspicionScore: row.nv_suspicion_score,
     evidenceSummaryText: row.evidence_summary_text,
+    // WHY this tier. generateReport.m has rendered a "Why: ..." line from this
+    // since it was written, and nothing ever sent the field -- so the PDF said
+    // "Tier B - assisted review recommended" and never which of the five
+    // situations produced that B. The screen has shown it since migration 0015.
+    tierReason: row.tier_reason || null,
+    // WHICH MODEL AND WHICH ENGINE produced the grade. The report is the
+    // artifact that leaves the system and goes into a patient record, so it
+    // carries its own provenance rather than relying on whoever reads it
+    // still having the case open in the reviewer console.
+    modelVersion: row.model_version || null,
+    provenanceRows: provenanceRows(row),
     generatedAt: new Date().toISOString(),
   };
   const inputPath = path.join(os.tmpdir(), `report_in_${caseId}_${Date.now()}.json`);
@@ -159,4 +232,8 @@ async function getOrCreateReport(caseId, { force = false } = {}) {
   };
 }
 
-module.exports = { getOrCreateReport };
+// __provenanceRowsForTest: verify_report_provenance.js checks the flattening
+// against what the database holds. Exported rather than duplicated there --
+// a test that reimplements the thing it tests agrees with itself, not with
+// the code.
+module.exports = { getOrCreateReport, __provenanceRowsForTest: provenanceRows };

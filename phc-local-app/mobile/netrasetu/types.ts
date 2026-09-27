@@ -117,6 +117,9 @@ export interface QualityResult {
   analysedAt: string;
 }
 
+import type { QualityEngine } from './lib/quality/engine';
+export type { QualityEngine };
+
 export type CaptureSource = 'gallery' | 'lens' | 'sample';
 
 export interface Capture {
@@ -130,6 +133,8 @@ export interface Capture {
   qualityStatus: QualityStatus;
   qualityReason: QualityReason | null;
   qualityScores: QualityResult | null;
+  /** Which engine gated this capture; null = not recorded (never guessed). */
+  qualityEngine: QualityEngine | null;
   retakeCount: number;
   bestEffort: boolean;
   capturedAt: string;

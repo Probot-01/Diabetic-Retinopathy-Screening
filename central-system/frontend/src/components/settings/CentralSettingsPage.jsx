@@ -161,7 +161,7 @@ export const CentralSettingsPage = ({
 
   // Interactive Action Handlers
   const handleSyncNow = () => {
-    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const nowStr = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
     const fullTimestamp = `Today at ${nowStr}`;
     updateSetting('lastSynced', fullTimestamp);
     // TODO: Wire background WebSocket delta sync when online

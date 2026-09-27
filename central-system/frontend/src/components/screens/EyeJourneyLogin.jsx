@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import './EyeJourneyLogin.css';
+import { centralApi } from '../../api/centralApiClient';
+import { USE_MOCK_DATA } from '../../config';
 
 // Load fonts
 try {
@@ -36,13 +38,15 @@ export const EyeJourneyLogin = ({ onLogin }) => {
   const [selectedRole, setSelectedRole] = useState(null);
   const [activeAuthRole, setActiveAuthRole] = useState(null);
 
-  const [adminUsername, setAdminUsername] = useState('krrish');
-  const [adminPassword, setAdminPassword] = useState('admin123');
+  // Live mode starts empty (the seeded demo accounts' credentials are printed
+  // once by scripts/seed-demo.js); mock mode keeps its demo pre-fill.
+  const [adminUsername, setAdminUsername] = useState(USE_MOCK_DATA ? 'admin' : '');
+  const [adminPassword, setAdminPassword] = useState(USE_MOCK_DATA ? 'admin123' : '');
   const [adminError, setAdminError] = useState(null);
   const [adminLoading, setAdminLoading] = useState(false);
 
-  const [ophthUsername, setOphthUsername] = useState('krrish');
-  const [ophthPassword, setOphthPassword] = useState('doctor123');
+  const [ophthUsername, setOphthUsername] = useState(USE_MOCK_DATA ? 'doctor' : '');
+  const [ophthPassword, setOphthPassword] = useState(USE_MOCK_DATA ? 'doctor123' : '');
   const [ophthError, setOphthError] = useState(null);
   const [ophthLoading, setOphthLoading] = useState(false);
 
@@ -105,42 +109,70 @@ export const EyeJourneyLogin = ({ onLogin }) => {
     if (enterEl) enterEl.classList.add('is-open');
   };
 
-  const handleAdminSubmit = (e) => {
-    e.preventDefault();
-    if (!adminUsername.trim() || !adminPassword.trim()) {
-      setAdminError(t('central.login.auth.errorEmpty', 'Please enter both username and password.'));
+  /**
+   * Live mode: POST /api/v1/auth/login with email + password. The server's
+   * answer decides the role -- the card the user picked is only a hint, and
+   * an account of the other role is told so rather than let in under it.
+   * Mock mode: the old client-side demo check, behind the DEMO DATA banner.
+   */
+  const submitLogin = async ({ cardRole, email, password, setError, setLoading, demoCheck, demoHint }) => {
+    if (!email.trim() || !password.trim()) {
+      setError(t('central.login.auth.errorEmpty', 'Please enter both email and password.'));
       return;
     }
-    setAdminLoading(true);
-    setAdminError(null);
-    setTimeout(() => {
-      if ((adminUsername.toLowerCase() === 'admin' && adminPassword === 'admin123') || adminPassword.length >= 4) {
-        setIsTransitioning(true);
-        setTimeout(() => onLogin('admin', adminUsername), 400);
-      } else {
-        setAdminError(t('central.login.auth.errorInvalid', 'INVALID CREDENTIALS. USE DEMO: admin / admin123'));
-        setAdminLoading(false);
+    setLoading(true);
+    setError(null);
+
+    if (USE_MOCK_DATA) {
+      setTimeout(() => {
+        if (demoCheck()) {
+          setIsTransitioning(true);
+          setTimeout(() => onLogin(cardRole, email), 400);
+        } else {
+          setError(demoHint);
+          setLoading(false);
+        }
+      }, 400);
+      return;
+    }
+
+    try {
+      const session = await centralApi.login(email.trim(), password);
+      const serverRole = session.user.role === 'district_admin' ? 'admin' : 'ophthalmologist';
+      if (serverRole !== cardRole) {
+        await centralApi.logout().catch(() => {});
+        setError(`This account is a ${session.user.role.replace('_', ' ')} account. Go back and choose that role.`);
+        setLoading(false);
+        return;
       }
-    }, 400);
+      setIsTransitioning(true);
+      setTimeout(() => onLogin(serverRole, session.user.email, session.user), 400);
+    } catch (err) {
+      setError(err.status === 401
+        ? t('central.login.auth.errorInvalid', 'Email or password is incorrect.')
+        : err.message);
+      setLoading(false);
+    }
+  };
+
+  const handleAdminSubmit = (e) => {
+    e.preventDefault();
+    submitLogin({
+      cardRole: 'admin', email: adminUsername, password: adminPassword,
+      setError: setAdminError, setLoading: setAdminLoading,
+      demoCheck: () => (adminUsername.toLowerCase() === 'admin' && adminPassword === 'admin123') || adminPassword.length >= 4,
+      demoHint: 'INVALID CREDENTIALS. USE DEMO: admin / admin123',
+    });
   };
 
   const handleOphthSubmit = (e) => {
     e.preventDefault();
-    if (!ophthUsername.trim() || !ophthPassword.trim()) {
-      setOphthError(t('central.login.auth.errorEmpty', 'Please enter both username and password.'));
-      return;
-    }
-    setOphthLoading(true);
-    setOphthError(null);
-    setTimeout(() => {
-      if ((ophthUsername.toLowerCase() === 'doctor' && ophthPassword === 'doctor123') || ophthPassword.length >= 4) {
-        setIsTransitioning(true);
-        setTimeout(() => onLogin('ophthalmologist', ophthUsername), 400);
-      } else {
-        setOphthError(t('central.login.auth.errorInvalid', 'INVALID CREDENTIALS. USE DEMO: doctor / doctor123'));
-        setOphthLoading(false);
-      }
-    }, 400);
+    submitLogin({
+      cardRole: 'ophthalmologist', email: ophthUsername, password: ophthPassword,
+      setError: setOphthError, setLoading: setOphthLoading,
+      demoCheck: () => (ophthUsername.toLowerCase() === 'doctor' && ophthPassword === 'doctor123') || ophthPassword.length >= 4,
+      demoHint: 'INVALID CREDENTIALS. USE DEMO: doctor / doctor123',
+    });
   };
 
   // --- Animation Orchestration ---
@@ -157,7 +189,13 @@ export const EyeJourneyLogin = ({ onLogin }) => {
         hasGL = !!(c.getContext('webgl2') || c.getContext('webgl'));
       } catch (e) {}
 
-      if (!hasGL) {
+      // Reduced motion: no scroll-driven journey. Show the static background and
+      // the sign-in form straight away, so the form is never behind an animation
+      // the visitor asked not to see (same path as a browser without WebGL).
+      let reducedMotion = false;
+      try { reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+
+      if (!hasGL || reducedMotion) {
         setAnatomyState('fallback');
         document.documentElement.style.setProperty('--enter-o', '1');
         const enterEl = document.getElementById('auth-overlay');
@@ -440,9 +478,10 @@ export const EyeJourneyLogin = ({ onLogin }) => {
           <form onSubmit={handleSubmit}>
             {error && <div className="login-auth-error"><span>⚠</span><span>{error}</span></div>}
             <div className="login-auth-field">
-              <label className="login-auth-label">USERNAME</label>
+              <label className="login-auth-label">{USE_MOCK_DATA ? 'USERNAME' : 'EMAIL'}</label>
               <input
-                type="text"
+                type={USE_MOCK_DATA ? 'text' : 'email'}
+                autoComplete={USE_MOCK_DATA ? 'username' : 'email'}
                 className="login-auth-input"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}

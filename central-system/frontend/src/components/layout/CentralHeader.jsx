@@ -51,7 +51,7 @@ const CentralHeader = ({ role, userProfile, onUpdateProfile, onLogout }) => {
   ];
 
   // Derive display name from userProfile
-  const displayName = userProfile?.fullName || (isOphth ? 'Dr. Krrish Gadekar' : 'Krrish Gadekar');
+  const displayName = userProfile?.fullName || userProfile?.email || 'Signed-in user';
 
   const navLinks = isOphth
     ? [

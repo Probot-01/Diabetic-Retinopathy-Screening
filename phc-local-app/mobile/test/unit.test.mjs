@@ -14,6 +14,8 @@ const ids = await import('../netrasetu/lib/ids.ts');
 const gate = await import('../netrasetu/lib/quality/qualityGate.ts');
 const { lifecycleOf } = await import('../netrasetu/db/captures.ts');
 const { setConfig, getConfig } = await import('../netrasetu/config/index.ts');
+const central = await import('../netrasetu/api/central.ts');
+const { QUALITY_GATE_ENGINE } = await import('../netrasetu/lib/quality/engine.ts');
 
 const baseQ = {
   knownDiabetic: true, yearsSinceDiagnosis: '5to10', glycemicControl: 'moderate', bloodPressure: 'normal',
@@ -227,4 +229,57 @@ test('quality gate: unknown camera ids fall back to the default preset, as MATLA
   assert.equal(gate.presetFor('forus_3nethra_v2'), 'default');
   assert.equal(gate.presetFor('mobile_lens'), 'mobile_lens');
   assert.equal(gate.presetFor('constructor'), 'default');
+});
+
+// ── "Synced" means central accepted it (api-contracts.md: 201, or 200 + duplicate:true) ──────────
+async function withFetch(status, body, fn) {
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const prev = getConfig();
+  setConfig({ centralUrl: 'http://central.test', phcApiKey: 'phc_test' });
+  try { return await fn(); } finally { globalThis.fetch = real; setConfig(prev); }
+}
+const FIELDS = { patientId: 'P', captureIdRef: 'C', cameraDeviceId: 'unknown', capturedAt: 'x', consentGivenAt: null, patientName: 'n', patientAge: 1,
+  patientContactNumber: '1', questionnaireData: {}, captureMetadata: {}, qualityScores: null, pendingCount: 1 };
+
+test('summary: 201 is accepted; 200 + duplicate:true is accepted; a bare 200 is NOT acceptance', async () => {
+  assert.equal((await withFetch(201, { caseId: 'c1', status: 'awaiting_image' }, () => central.postSummary(FIELDS))).caseId, 'c1');
+  assert.equal((await withFetch(200, { caseId: 'c1', duplicate: true }, () => central.postSummary(FIELDS))).caseId, 'c1');
+  await assert.rejects(withFetch(200, { caseId: 'c1' }, () => central.postSummary(FIELDS)), (e) => e.code === 'not_accepted' && e.retryable === false);
+  await assert.rejects(withFetch(201, {}, () => central.postSummary(FIELDS)), (e) => e.code === 'not_accepted');
+});
+
+test('a 4xx is central refusing (not retryable, its own code); a 5xx is retryable', async () => {
+  await assert.rejects(withFetch(400, { error: 'invalid_field', message: 'bad' }, () => central.postSummary(FIELDS)), (e) => e.code === 'invalid_field' && !e.retryable);
+  await assert.rejects(withFetch(503, { error: 'x', message: 'down' }, () => central.postSummary(FIELDS)), (e) => e.retryable);
+});
+
+test('the phone reports its quality-gate engine as js-device, not a fallback', () => {
+  assert.deepEqual({ engine: QUALITY_GATE_ENGINE.engine, fallback: QUALITY_GATE_ENGINE.fallback }, { engine: 'js-device', fallback: false });
+  assert.ok(QUALITY_GATE_ENGINE.detail.length <= 300);
+});
+
+test('the summary request carries the PHC API key and the engine', async () => {
+  const real = globalThis.fetch; let seen;
+  globalThis.fetch = async (u, init) => { seen = { u, init }; return new Response(JSON.stringify({ caseId: 'c1' }), { status: 201 }); };
+  const prev = getConfig(); setConfig({ centralUrl: 'http://central.test', phcApiKey: 'phc_test' });
+  try { await central.postSummary({ ...FIELDS, qualityGateEngine: QUALITY_GATE_ENGINE }); } finally { globalThis.fetch = real; setConfig(prev); }
+  assert.equal(seen.u, 'http://central.test/api/v1/cases/summary');
+  assert.equal(seen.init.headers['X-PHC-Api-Key'], 'phc_test');
+  assert.equal(JSON.parse(seen.init.body).qualityGateEngine.engine, 'js-device');
+});
+
+// ── Expo's UTF-8-only TextDecoder must not crash fast-png at load ───────────
+test('latin1 shim: a UTF-8-only TextDecoder gains latin1 and keeps its UTF-8 behaviour', async () => {
+  const Real = globalThis.TextDecoder;
+  globalThis.TextDecoder = class Utf8Only extends Real {
+    constructor(label, opts) { if (label && !/^utf-?8$/i.test(label)) throw new RangeError(`Unknown encoding ${label}`); super(label, opts); }
+  };
+  try {
+    const { installLatin1Decoder } = await import('../netrasetu/lib/latin1Shim.ts');
+    installLatin1Decoder();
+    assert.equal(new TextDecoder('latin1').decode(new Uint8Array([0x63, 0x61, 0x66, 0xe9])), 'café');
+    assert.equal(new TextDecoder('utf-8').decode(new Uint8Array([0xc3, 0xa9])), 'é');
+    assert.equal(new TextDecoder().decode(new Uint8Array([0x61])), 'a');
+  } finally { globalThis.TextDecoder = Real; }
 });

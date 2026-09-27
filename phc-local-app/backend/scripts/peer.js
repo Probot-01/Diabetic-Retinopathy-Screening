@@ -17,7 +17,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
+require('../loadEnv');
 const db = require('../db/localDb');
 const peerCrypto = require('../services/peerCrypto');
 const peerBundle = require('../services/peerBundle');

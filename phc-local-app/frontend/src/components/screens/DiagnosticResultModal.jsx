@@ -14,7 +14,7 @@ export const DiagnosticResultModal = React.memo(({ isOpen, onClose, item, predic
   const captureTime = useMemo(() => {
     if (!item?.capturedAt) return "02:35 PM";
     try {
-      return new Date(item.capturedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      return new Date(item.capturedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
     } catch {
       return "02:35 PM";
     }

@@ -9,7 +9,7 @@
 import * as Crypto from 'expo-crypto';
 import { File, Paths } from 'expo-file-system';
 import { getConfig, POLICY } from '../config';
-import { CentralStatus, PhcReport } from '../types';
+import { CentralStatus, PhcReport, QualityEngine } from '../types';
 
 export class CentralError extends Error {
   constructor(
@@ -49,7 +49,7 @@ function url(path: string): string {
   return `${base}${path}`;
 }
 
-async function request<T>(path: string, init: RequestInit, timeoutMs = POLICY.requestTimeoutMs): Promise<T> {
+async function requestFull<T>(path: string, init: RequestInit, timeoutMs = POLICY.requestTimeoutMs): Promise<{ status: number; body: T }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
@@ -74,7 +74,11 @@ async function request<T>(path: string, init: RequestInit, timeoutMs = POLICY.re
     const b = (body ?? {}) as { error?: string; message?: string };
     throw new CentralError('http', b.error ?? `http_${res.status}`, b.message ?? `Central server returned ${res.status}.`, res.status);
   }
-  return body as T;
+  return { status: res.status, body: body as T };
+}
+
+async function request<T>(path: string, init: RequestInit, timeoutMs = POLICY.requestTimeoutMs): Promise<T> {
+  return (await requestFull<T>(path, init, timeoutMs)).body;
 }
 
 // ── Health ─────────────────────────────────────────────────────────────────
@@ -103,6 +107,8 @@ export interface CaseFields {
   questionnaireData: object;
   captureMetadata: object;
   qualityScores: object | null;
+  /** Which engine ran the quality gate ("js-device" for this app); null/absent = not recorded. */
+  qualityGateEngine?: QualityEngine | null;
   pendingCount: number;
 }
 
@@ -113,12 +119,26 @@ export interface IngestResponse {
   duplicate?: boolean;
 }
 
-export function postSummary(f: CaseFields): Promise<IngestResponse> {
-  return request<IngestResponse>('/api/v1/cases/summary', {
+/**
+ * "Accepted" is exactly what api-contracts.md says: 201 (created), or 200 with
+ * duplicate:true (central already had this capture id), and a case id. Any
+ * other 2xx is not acceptance -- the caller must not mark the case synced.
+ */
+function accepted(r: { status: number; body: IngestResponse | null }, what: string): IngestResponse {
+  const b = r.body;
+  const ok = (r.status === 201 || (r.status === 200 && b?.duplicate === true)) && typeof b?.caseId === 'string' && b.caseId !== '';
+  if (!ok || !b) {
+    throw new CentralError('http', 'not_accepted', `Central did not accept the ${what} (HTTP ${r.status}).`, r.status);
+  }
+  return b;
+}
+
+export async function postSummary(f: CaseFields): Promise<IngestResponse> {
+  return accepted(await requestFull<IngestResponse>('/api/v1/cases/summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(f),
-  });
+  }), 'case summary');
 }
 
 function toMultipart(f: CaseFields): FormData {
@@ -138,12 +158,12 @@ function mimeFor(uri: string): string {
 }
 
 /** Single-shot upload: POST /api/v1/cases. 201 new, 200 duplicate -- both mean central has it. */
-export function postCase(f: CaseFields, imageUri: string): Promise<IngestResponse> {
+export async function postCase(f: CaseFields, imageUri: string): Promise<IngestResponse> {
   const form = toMultipart(f);
   const name = imageUri.split('/').pop() ?? `${f.captureIdRef}.jpg`;
   // React Native's FormData file part.
   form.append('image', { uri: imageUri, name, type: mimeFor(imageUri) } as unknown as Blob);
-  return request<IngestResponse>('/api/v1/cases', { method: 'POST', body: form }, POLICY.uploadTimeoutMs);
+  return accepted(await requestFull<IngestResponse>('/api/v1/cases', { method: 'POST', body: form }, POLICY.uploadTimeoutMs), 'case');
 }
 
 // ── Chunked / resumable upload (Task 8.2) ──────────────────────────────────
@@ -198,7 +218,7 @@ export async function postCaseChunked(f: CaseFields, imageUri: string, onProgres
     }
   }
 
-  return request<IngestResponse>(`/api/v1/cases/${ref}/chunks/complete`, { method: 'POST' }, POLICY.uploadTimeoutMs);
+  return accepted(await requestFull<IngestResponse>(`/api/v1/cases/${ref}/chunks/complete`, { method: 'POST' }, POLICY.uploadTimeoutMs), 'case');
 }
 
 // ── Status and result ──────────────────────────────────────────────────────

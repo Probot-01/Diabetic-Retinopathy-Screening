@@ -45,12 +45,40 @@ const FOV_TARGET_COVERAGE = 0.6;
  * rgb2gray(imread(...)).
  */
 async function loadGrayscale(buffer) {
+  // ── rgb2gray's OWN FORMULA, NOT sharp's greyscale() ───────────────────────
+  // This used to call .greyscale(), which is libvips' colorimetric conversion:
+  // it linearises sRGB, takes luminance, and re-encodes. MATLAB's rgb2gray
+  // does something different and simpler -- it applies the ITU-R BT.601 luma
+  // weights DIRECTLY to the gamma-encoded bytes:
+  //
+  //     gray = 0.2989*R + 0.5870*G + 0.1140*B
+  //
+  // The two disagree by several grey levels on a real fundus image, and since
+  // every score below starts from this array, that one difference moved all of
+  // them. It showed up most clearly in illuminationScore, which is a pure
+  // function of the mean: 0.872 here against 0.826 from the compiled gate.
+  //
+  // uint8 with round-half-away-from-zero, because rgb2gray on a uint8 image
+  // returns uint8 and MATLAB rounds that way -- Math.round matches for the
+  // non-negative values this can produce.
   const { data, info } = await sharp(buffer)
-    .rotate() // respect EXIF orientation, same as a camera-facing MATLAB imread would see on screen
-    .greyscale()
+    .rotate()   // EXIF orientation; see the note below
+    .removeAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  return { pixels: data, width: info.width, height: info.height };
+
+  const n = info.width * info.height;
+  const px = Buffer.allocUnsafe(n);
+  const ch = info.channels;
+  if (ch === 1) {
+    data.copy(px, 0, 0, n);
+  } else {
+    for (let i = 0, j = 0; i < n; i += 1, j += ch) {
+      const g = 0.2989 * data[j] + 0.5870 * data[j + 1] + 0.1140 * data[j + 2];
+      px[i] = Math.min(255, Math.max(0, Math.round(g)));
+    }
+  }
+  return { pixels: px, width: info.width, height: info.height };
 }
 
 /**
@@ -249,24 +277,44 @@ function assessGlareMotionOcclusion(pixels, width, height, discMask, discArea) {
 /**
  * runQualityGateFallback(imageBuffer)
  *
- * Explicitly refused: The JS algorithms diverged from the MATLAB path and 
- * gave silently different decisions. It is safer to force a retake when 
- * MATLAB is absent.
+ * Explicitly refused: the JS algorithms diverged from the MATLAB path and gave
+ * silently different decisions, so this tier is switched off.
+ *
+ * ── WHERE THE DIVERGENCE CAME FROM, for whoever revives this ───────────────
+ * Measured against the compiled gate on datasets/2.jpg before the switch-off:
+ * status and reason agreed, but the SCORES did not -- illuminationScore 0.826
+ * vs 0.872, occlusionScore 0.0068 vs 0.00023 (a 29x relative gap). The
+ * decisions matching was luck at those thresholds, not equivalence: an image
+ * near the occlusion cut would have been retaken by one implementation and
+ * passed by the other, and the scores are forwarded to central where they
+ * steer adaptive enhancement.
+ *
+ * At least one root cause is identified and FIXED in loadGrayscale below:
+ * this file used sharp's .greyscale(), which is libvips' colorimetric
+ * conversion through linear light, where MATLAB's rgb2gray applies the BT.601
+ * luma weights directly to the gamma-encoded bytes. Every score starts from
+ * that array, so the one difference moved all of them.
+ *
+ * That fix is NOT a reason to switch this back on. It was never confirmed to
+ * be the only cause -- occlusionScore was 29x out, which a few grey levels
+ * does not explain -- and nothing re-measured the remaining scores afterwards,
+ * because the path below now throws before reaching them. Re-enabling means
+ * getting verify_quality_gate_parity.js to zero mismatches first, on more than
+ * one image.
+ *
+ * It THROWS rather than returning a verdict. It used to return
+ * { status: 'retake', reason: 'MATLAB_UNAVAILABLE' } -- a made-up result: no
+ * check had run, so the image had not failed anything, and 'MATLAB_UNAVAILABLE'
+ * is not one of the contract's six quality reasons. A technician would have
+ * been told to retake a photograph that may have been fine, over and over. A
+ * throw is reported truthfully: POST /captures answers 503 quality_gate_failed,
+ * the image is kept, and the capture can be re-checked once MATLAB (or the
+ * compiled gate, QUALITY_GATE_EXE) is available.
  */
-async function runQualityGateFallback(imageBuffer) {
-  return { 
-    status: 'retake', 
-    reason: 'MATLAB_UNAVAILABLE', 
-    scores: {
-      focusScore: 0,
-      illuminationScore: 0,
-      fovScore: 0,
-      coveragePercent: 0,
-      glareScore: 0,
-      motionScore: 0,
-      occlusionScore: 0
-    }
-  };
+async function runQualityGateFallback(imageBuffer) { // eslint-disable-line no-unused-vars
+  throw new Error(
+    'the JS quality-gate fallback is switched off (its decisions diverged from the MATLAB gate), '
+    + 'so no quality check could run. Install MATLAB or build the compiled gate (QUALITY_GATE_EXE).');
 }
 
 module.exports = { runQualityGateFallback };

@@ -101,11 +101,26 @@
     }
   },
 
+  "_deviceAssociationsReadme": [
+    "The family each WORKER-REPORTED device implies. classifyCameraFamily.m",
+    "compares it against the family it detects in the image; a disagreement is",
+    "stored as cases.camera_mismatch (migration 0021).",
+    "",
+    "A null value means DELIBERATELY NOT CHECKABLE -- the id names no single",
+    "camera family, so there is nothing to compare against and camera_mismatch",
+    "is stored as NULL ('nobody could check'), not false ('the two agree').",
+    "A device MISSING from this table behaves the same way at runtime, which is",
+    "why every id the PHC front-end offers is listed here explicitly: an",
+    "omission and a decision must not look identical. verify_camera_vocabulary.js",
+    "fails if captureOptions.js starts offering an id this table does not name."
+  ],
+
   "deviceAssociations": {
     "forus_3nethra_v2":   "portable_handheld",
     "remidio_fop":        "smartphone_adapter",
     "topcon_trc_nw400":   "desktop_tabletop",
     "zeiss_visucam":      "desktop_tabletop",
+    "generic_fundus":     null,
     "unknown":            null
   }
 }

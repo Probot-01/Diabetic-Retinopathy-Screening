@@ -25,16 +25,12 @@
  *   const { rows } = await pool.query('SELECT ...', [params]);
  */
 
-const path = require('path');
 const { Pool } = require('pg');
 
-// Load a repo-root .env if present (never required -- env vars set by the shell
-// or by a calling script always win, since dotenv does not overwrite).
-try {
-  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
-} catch {
-  // dotenv not installed -- fine, fall through to real env vars.
-}
+// This service's .env, then the shared root .env (never required -- env vars
+// set by the shell or by a calling script always win, since dotenv does not
+// overwrite).
+require('../loadEnv');
 
 const POOL_TUNING = {
   max: 10,                        // conservative for a single-node central server
@@ -51,15 +47,18 @@ if (process.env.DATABASE_URL) {
     console.warn(
       '[pgClient] Neither DATABASE_URL nor PGPASSWORD is set. Connecting with an ' +
       'empty password, which will almost certainly fail.\n' +
-      '           Set DATABASE_URL, e.g.\n' +
-      '             postgresql://postgres:<password>@localhost:5432/dr_screening_central'
+      '           Set DATABASE_URL (see central-system/backend/.env.example), e.g. the dev DB:\n' +
+      '             postgresql://netrasetu:<password>@localhost:5433/dr_screening_central'
     );
   }
+  // Defaults match the Docker dev database (docker-compose.dev.yml, host port
+  // 5433) -- the only database this project uses. Never 5432/postgres: that is
+  // where a separately installed Postgres would be listening.
   config = {
     host:     process.env.PGHOST     || 'localhost',
-    port:     parseInt(process.env.PGPORT || '5432', 10),
+    port:     parseInt(process.env.PGPORT || '5433', 10),
     database: process.env.PGDATABASE || 'dr_screening_central',
-    user:     process.env.PGUSER     || 'postgres',
+    user:     process.env.PGUSER     || 'netrasetu',
     password: process.env.PGPASSWORD || '',
     ...POOL_TUNING,
   };

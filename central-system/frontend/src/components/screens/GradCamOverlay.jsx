@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { CENTRAL_API_BASE } from '../../config';
+import { CENTRAL_API_BASE, USE_MOCK_DATA } from '../../config';
 
 /**
  * GradCamOverlay — real case: renders the actual fundus image with the real
@@ -9,9 +9,8 @@ import { CENTRAL_API_BASE } from '../../config';
  * "/media/cases/<id>/original.jpg"), served by the central backend itself —
  * not the frontend dev server — so they're resolved against CENTRAL_API_BASE.
  *
- * Mock/no-data case (imageUrl null, e.g. mock data or a case not yet graded):
- * falls back to the original procedurally-generated synthetic retina, so the
- * mock demo path is completely unchanged.
+ * No image (imageUrl null): mock mode draws the procedurally generated
+ * synthetic retina; live mode shows why there is no image (see GradCamOverlay).
  */
 const RealGradCam = ({ showOverlay, caseData, onLoadError }) => {
   const imageSrc = `${CENTRAL_API_BASE}${caseData.imageUrl}`;
@@ -317,15 +316,26 @@ const SyntheticGradCam = ({ showOverlay, caseData }) => {
   );
 };
 
+/** Live mode, no image to show: say why, in the space the image would take. */
+const NoImage = ({ title, detail }) => (
+  <div className="gradcam-viewer" role="alert" style={{
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    background: 'var(--c-black, #1A1008)', color: 'var(--c-cream, #F5EDE0)', padding: 'var(--sp-6, 24px)',
+    textAlign: 'center', fontFamily: 'var(--font-mono, monospace)', minHeight: 320,
+  }}>
+    <div style={{ color: 'var(--c-crimson, #C42B2B)', fontWeight: 700, letterSpacing: '1px' }}>{title}</div>
+    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8, maxWidth: 360 }}>{detail}</div>
+  </div>
+);
+
 /**
- * GradCamOverlay — picks the real image renderer when the case actually has
- * one, otherwise falls back to the synthetic illustration exactly as before.
- * This is the only exported entry point; CaseDetailPage's usage is unchanged.
+ * GradCamOverlay — the real fundus image and Grad-CAM overlay when the case has
+ * them. The procedurally drawn synthetic retina is a mock-mode illustration
+ * ONLY: in live mode a case with no image, or an image that fails to load,
+ * says so instead — a made-up heatmap next to a real grade would be a
+ * fabricated result (design doc §1.22).
  */
 export const GradCamOverlay = ({ showOverlay, caseData }) => {
-  // If the real /media image 404s or the connection drops mid-demo, drop to
-  // the synthetic illustration instead of a broken-image icon — same
-  // "never a visible error" rule as the API fallbacks.
   const [realImageFailed, setRealImageFailed] = useState(false);
 
   if (caseData?.imageUrl && !realImageFailed) {
@@ -337,5 +347,12 @@ export const GradCamOverlay = ({ showOverlay, caseData }) => {
       />
     );
   }
-  return <SyntheticGradCam showOverlay={showOverlay} caseData={caseData} />;
+  if (USE_MOCK_DATA) {
+    return <SyntheticGradCam showOverlay={showOverlay} caseData={caseData} />;
+  }
+  return realImageFailed
+    ? <NoImage title="FUNDUS IMAGE FAILED TO LOAD"
+        detail={`${caseData.imageUrl} could not be fetched from the central server. Check that it is running and that you are signed in, then reload.`} />
+    : <NoImage title="NO FUNDUS IMAGE ON THIS CASE"
+        detail="The case has no stored image yet (not graded, or grading failed). No attention map can be shown." />;
 };
