@@ -10,7 +10,7 @@
  * and they are reported together, in one response, for one admin screen.
  *
  * Thresholds (env, all optional):
- *   SILENT_PHC_HOURS       48   no contact of any kind for this long
+ *   PHC_SILENT_HOURS       24   no contact of any kind for this long (services/phcSilence.js)
  *   STUCK_JOB_MINUTES      15   'processing' this long with no recent recovery
  *                               (normal grading is ~12.5 s)
  *   UNREVIEWED_CASE_HOURS  48   referable, never reviewed, received this long ago
@@ -27,7 +27,7 @@ const num = (name, dflt) => {
   return Number.isFinite(v) && v > 0 ? v : dflt;
 };
 
-const SILENT_PHC_HOURS      = num('SILENT_PHC_HOURS', 48);
+const { PHC_SILENT_HOURS } = require('./phcSilence');   // the one definition of a silent PHC
 const STUCK_JOB_MINUTES     = num('STUCK_JOB_MINUTES', 15);
 const UNREVIEWED_CASE_HOURS = num('UNREVIEWED_CASE_HOURS', 48);
 
@@ -44,7 +44,7 @@ async function silentPhcs() {
     WHERE last_contact_at IS NULL
        OR last_contact_at < now() - make_interval(hours => $1)
     ORDER BY last_contact_at ASC NULLS FIRST
-  `, [SILENT_PHC_HOURS]);
+  `, [PHC_SILENT_HOURS]);   // same rule as phcSilence.isSilent()
   return rows.map((r) => ({
     phcId:         r.phc_id,
     phcName:       r.name,
@@ -162,7 +162,7 @@ async function getSystemHealth() {
     segWorker,
     alerts,
     thresholds: {
-      silentPhcHours: SILENT_PHC_HOURS,
+      silentPhcHours: PHC_SILENT_HOURS,
       stuckJobMinutes: STUCK_JOB_MINUTES,
       unreviewedCaseHours: UNREVIEWED_CASE_HOURS,
     },
@@ -170,4 +170,4 @@ async function getSystemHealth() {
   };
 }
 
-module.exports = { getSystemHealth, SILENT_PHC_HOURS, STUCK_JOB_MINUTES, UNREVIEWED_CASE_HOURS };
+module.exports = { getSystemHealth, PHC_SILENT_HOURS, STUCK_JOB_MINUTES, UNREVIEWED_CASE_HOURS };

@@ -539,7 +539,7 @@ export const ReviewQueuePage = () => {
                 }}
               >
                 <td className="t-mono" style={{ opacity: 0.4 }}>{item.priorityRank}</td>
-                <td title={new Date(item.capturedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}>
+                <td title={new Date(item.capturedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}>
                   <div className="u-flex u-items-center u-gap-2">
                     <span className="t-mono" style={{ fontWeight: 700 }}>{relativeTime(item.capturedAt, now)}</span>
                     {isNew && (
@@ -557,7 +557,7 @@ export const ReviewQueuePage = () => {
                     {item.patientName || item.patientReference}
                   </div>
                   <div className="t-mono" style={{ fontSize: '11px', opacity: 0.6 }}>
-                    {item.patientReference} {item.patientAge ? `• ${item.patientAge}Y` : ''}
+                    {item.patientName ? item.patientReference : ''}{item.patientName && item.patientAge ? ' • ' : ''}{item.patientAge ? `${item.patientAge}Y` : ''}
                   </div>
                 </td>
                 <td className="t-mono">{item.phcName}</td>
@@ -604,7 +604,7 @@ export const ReviewQueuePage = () => {
                     act on. null = free. */}
                 <td className="t-mono" data-testid="claimed-by-cell">
                   {item.claimedBy
-                    ? <span className="badge badge--warning" title={item.claimedAt ? `since ${new Date(item.claimedAt).toLocaleTimeString()}` : undefined}>● {item.claimedBy.name || 'ANOTHER REVIEWER'}</span>
+                    ? <span className="badge badge--warning" title={item.claimedAt ? `since ${new Date(item.claimedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}` : undefined}>● {item.claimedBy.name || 'ANOTHER REVIEWER'}</span>
                     : <span style={{ opacity: 0.35 }}>—</span>}
                 </td>
                 {/* Urgency: ordering hint only. Rendered muted and with the

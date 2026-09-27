@@ -363,7 +363,7 @@ export const AdminScrollDashboard = () => {
   }, []);
 
   const today = useMemo(() => {
-    return new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    return new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   }, []);
 
   // Straight from the response (mock mode: mockAdminDashboard). A field the
@@ -387,8 +387,8 @@ export const AdminScrollDashboard = () => {
   const telemetry = useMemo(() => ([
     { k: 'CASES', v: stats.casesToday },
     { k: 'ACCURACY', v: stats.modelAccuracy != null ? stats.modelAccuracy + '%' : NA },
-    { k: 'CENTRES', v: phcs.length },
-    { k: 'QUEUE', v: stats.thisWeek },
+    { k: 'ACTIVE CENTRES', v: phcs.length },
+    { k: 'THIS WEEK', v: stats.thisWeek },
   ]), [stats, phcs]);
 
   const setCard = (i) => (el) => { cardRefs.current[i] = el; };

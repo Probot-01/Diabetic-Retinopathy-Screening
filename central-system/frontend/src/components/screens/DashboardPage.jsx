@@ -342,7 +342,7 @@ export const DashboardPage = () => {
           <h1 className="section__title" style={{ marginBottom: 0 }}>{t('central.dashboard.title', 'DASHBOARD')}</h1>
         </div>
         <span className="t-mono" style={{ opacity: 0.7 }}>
-          {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' })}
+          {new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' })}
         </span>
       </div>
 

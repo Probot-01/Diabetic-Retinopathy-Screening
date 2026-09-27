@@ -49,6 +49,7 @@ const PhcRow = React.memo(({ phc }) => {
       <td className="t-mono u-text-right" style={{ fontSize: 'var(--fs-tiny)', color: 'var(--c-text-muted)' }} data-testid="phc-last-sync">
         {phc.lastSyncAt
           ? new Date(phc.lastSyncAt).toLocaleString('en-IN', {
+              timeZone: 'Asia/Kolkata',
               day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
             })
           : t('central.phcHealth.table.never', 'NEVER')}
@@ -224,12 +225,12 @@ export const PhcHealthPage = () => {
         <div className="bento u-mb-6">
           <div className="bento--span-3">
             <div className="stat hash-fill">
-              <div className="stat__label">SILENT PHCs (&gt;48H)</div>
+              <div className="stat__label">SILENT PHCs (&gt;{systemHealth.thresholds?.silentPhcHours ?? 24}H)</div>
               <div className="stat__value" style={{ color: systemHealth.silentPhcs.length > 0 ? '#A82222' : 'var(--c-success)' }}>
                 {systemHealth.silentPhcs.length}
               </div>
               <div className="stat__delta" style={{ color: systemHealth.silentPhcs.length > 0 ? '#A82222' : 'var(--c-success)' }}>
-                {systemHealth.silentPhcs.length > 0 ? 'Physical inspection needed' : 'All clinics synced'}
+                {systemHealth.silentPhcs.length > 0 ? 'Physical inspection needed' : 'All clinics in contact'}
               </div>
             </div>
           </div>
@@ -329,7 +330,7 @@ export const PhcHealthPage = () => {
               boxShadow: statusFilter === 'silent' ? '3px 3px 0px #000' : 'none',
               transform: statusFilter === 'silent' ? 'translate(-1px, -1px)' : 'none',
             }}
-            title="Filter by silent PHCs (no case received within the configured window)"
+            title="Filter by silent PHCs (no contact within the configured window)"
           >
             ⚠ {silentCount} SILENT
           </button>

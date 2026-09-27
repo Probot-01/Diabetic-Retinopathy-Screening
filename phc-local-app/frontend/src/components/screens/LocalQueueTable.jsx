@@ -242,7 +242,7 @@ export const LocalQueueTable = () => {
                     </td>
                     <td>
                       <span className="t-mono" style={{ fontSize: '13px' }}>
-                        {new Date(item.capturedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {new Date(item.capturedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </td>
                     <td>

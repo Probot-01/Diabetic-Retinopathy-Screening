@@ -362,7 +362,7 @@ export const mockSystemHealth = {
     { kind: 'unreviewed_sla', subject: 'Case PT-2056 (PDR / Grade 4)', message: 'Referable DR case unreviewed for 51 hours, breaching the 48-hour national clinical SLA.', firstSeenAt: '2026-09-20T10:00:00Z', occurrences: 1 },
   ],
   thresholds: {
-    silentPhcHours: 48,
+    silentPhcHours: 24,
     stuckJobMinutes: 15,
     unreviewedCaseHours: 48,
   },

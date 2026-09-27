@@ -19,7 +19,7 @@ const MetricBar = ({ label, value, maxVal = 1, color = 'var(--c-crimson)' }) => 
       <div className="u-flex u-justify-between u-items-center" style={{ marginBottom: 'var(--sp-1)' }}>
         <span className="t-label">{label}</span>
         <span className="t-mono" style={{ fontWeight: 700, fontSize: 'var(--fs-small)' }}>
-          {typeof value === 'number' ? `${pct}%` : 'N/A'}
+          {typeof value === 'number' ? `${pct}%` : 'NOT COMPUTED'}
         </span>
       </div>
       <div className="bar">
@@ -202,11 +202,10 @@ export const CaseDetailPage = () => {
           </button>
           <div>
             <span className="t-mono" style={{ fontSize: 'var(--fs-small)', opacity: 0.5 }}>{t('central.caseDetail.caseLabel', 'CASE')}</span>
-            <span className="t-mono" style={{ fontWeight: 700, marginLeft: 'var(--sp-2)' }}>
-              #{caseId.slice(0, 8).toUpperCase()}
-            </span>
-            <span className="t-mono" style={{ fontWeight: 700, marginLeft: 'var(--sp-3)', color: 'var(--c-crimson)' }}>
-              • {c.patientReference || 'NO PATIENT REFERENCE'}
+            {/* The patient reference (PT-1234) is the readable case identifier the
+                queue and referral screens also show; the raw case UUID stays in the tooltip. */}
+            <span className="t-mono" title={`Case ID ${caseId}`} style={{ fontWeight: 700, marginLeft: 'var(--sp-2)', color: 'var(--c-crimson)' }}>
+              {c.patientReference || caseId}
             </span>
           </div>
         </div>

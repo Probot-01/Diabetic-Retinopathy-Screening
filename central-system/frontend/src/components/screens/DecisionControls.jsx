@@ -166,7 +166,7 @@ export const DecisionControls = ({ caseData, onSubmit, submitted, claimedBy, pri
 
         {priorReview && (
           <div style={{ marginBottom: 'var(--sp-4)', padding: '12px', border: '1px solid var(--c-warning)', background: 'rgba(255, 170, 0, 0.1)', color: 'var(--c-warning)', fontSize: 'var(--fs-small)' }}>
-            <strong>⚠ PRIOR REVIEW EXISTS:</strong> This case was already reviewed by {priorReview.reviewerName} on {new Date(priorReview.reviewedAt).toLocaleString()}.<br />
+            <strong>⚠ PRIOR REVIEW EXISTS:</strong> This case was already reviewed by {priorReview.reviewerName} on {new Date(priorReview.reviewedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} IST.<br />
             Decision: {String(priorReview.decision).toUpperCase()} {priorReview.decision === 'override' ? `(Grade ${priorReview.correctedGrade}, Reason: ${priorReview.overrideReasonCategory})` : ''}.<br />
             Any new submission will be recorded as a correction.
           </div>

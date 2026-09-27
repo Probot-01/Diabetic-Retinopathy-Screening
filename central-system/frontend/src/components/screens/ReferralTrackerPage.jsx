@@ -106,6 +106,7 @@ const ReferralRow = React.memo(({ item, onAdvance, onAssign }) => {
       </td>
       <td className="t-mono u-text-right" style={{ fontSize: 'var(--fs-tiny)', color: 'var(--c-text-muted)' }}>
         {new Date(item.updatedAt).toLocaleString('en-IN', {
+          timeZone: 'Asia/Kolkata',
           day: '2-digit',
           month: 'short',
           hour: '2-digit',

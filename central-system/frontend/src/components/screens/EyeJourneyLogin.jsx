@@ -189,7 +189,13 @@ export const EyeJourneyLogin = ({ onLogin }) => {
         hasGL = !!(c.getContext('webgl2') || c.getContext('webgl'));
       } catch (e) {}
 
-      if (!hasGL) {
+      // Reduced motion: no scroll-driven journey. Show the static background and
+      // the sign-in form straight away, so the form is never behind an animation
+      // the visitor asked not to see (same path as a browser without WebGL).
+      let reducedMotion = false;
+      try { reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+
+      if (!hasGL || reducedMotion) {
         setAnatomyState('fallback');
         document.documentElement.style.setProperty('--enter-o', '1');
         const enterEl = document.getElementById('auth-overlay');
