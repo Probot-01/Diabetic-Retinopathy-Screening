@@ -555,8 +555,15 @@ router.get('/:caseId/report', anyUser, async (req, res, next) => {
     await logAccess(req.user?.userId, 'view_report', 'case', caseId);
     res.json(out);
   } catch (err) {
+    // The full MATLAB error (paths, stack, licence text) goes to the server
+    // log; the reviewer gets a short statement. A raw MATLAB dump on a
+    // clinician's screen is neither actionable for them nor safe to expose.
     console.error(`[cases] report for ${caseId} failed:`, err.message);
-    res.status(502).json({ error: 'report_generation_failed', message: err.message });
+    res.status(502).json({
+      error: 'report_generation_failed',
+      message: 'The evidence report could not be generated on the server. '
+        + 'The grade and evidence on this screen are unaffected; an administrator can find the cause in the server log.',
+    });
   }
 });
 
