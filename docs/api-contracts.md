@@ -19,6 +19,8 @@
 Kept because this file is the tie-breaker: when it changes, the code and both
 plans have to be re-checked against it, and a silent edit makes that impossible.
 
+**2026-09-27 (demo prep) — One definition of a silent PHC.** `GET /admin/system-health` counted a site silent after 48 h without any contact (`SILENT_PHC_HOURS`); `GET /admin/phcs` after 24 h without a *case* (`PHC_SILENT_HOURS`). The two screens could disagree on the same site. Both now use one rule, in `services/phcSilence.js`: no contact of any kind within `PHC_SILENT_HOURS` (default 24), or never. Changes: `thresholds.silentPhcHours` default 48 -> 24; `/admin/phcs` `status` is derived from contact, not from the last case; `/admin/phcs` items gain `lastContactAt`; env `SILENT_PHC_HOURS` is removed and ignored.
+
 **2026-09-27 (later) — `GET /api/v1/admin/phcs`.** Lists every PHC site with its recent activity (district_admin). It gives the PHC Health page a real data source; that table used to say "no live data source yet". Adds nullable `phc_sites.phc_code` and `phc_sites.district` (migration 0020); both are reported as `null` until someone records them. New optional env `PHC_SILENT_HOURS` (default 24).
 
 **2026-09-27 — Reviewer and admin flows, verified against real cases.**
@@ -668,13 +670,13 @@ District admin. One call returns four checks: silent PHCs, stuck grading jobs, t
   "matlabSession":   { "status", "lastHeartbeatAt", "restartsInWindow", "lastError" },
   "alerts":          [ { "kind": "matlab_session_down", "subject", "message",
                          "firstSeenAt", "lastSeenAt", "occurrences" } ],
-  "thresholds":      { "silentPhcHours": 48, "stuckJobMinutes": 15, "unreviewedCaseHours": 48 },
+  "thresholds":      { "silentPhcHours": 24, "stuckJobMinutes": 15, "unreviewedCaseHours": 48 },
   "generatedAt": "…"
 }
 ```
 
 **The four checks:**
-- **`silentPhcs`:** a PHC appears when it has had no contact of any kind (full case, summary packet or chunk) for `silentPhcHours`, or has never made contact (`lastContactAt: null`).
+- **`silentPhcs`:** a PHC appears when it has had no contact of any kind (full case, summary packet or chunk) for `silentPhcHours` (env `PHC_SILENT_HOURS`, default 24), or has never made contact (`lastContactAt: null`). This is the same rule `GET /admin/phcs` uses for `status`, so the System Health count and the number of `"silent"` rows on the PHC Health page are always equal.
 - **`stuckJobs`:** a case appears when it is still processing long after it arrived. The automatic watchdog re-queues such cases up to 3 times; once `autoRecoveryExhausted` is `true`, it needs a human.
 - **`matlabSessionStatus`:** one of `"healthy" | "restarting" | "down" | "disabled"`. The supervisor restarts the session itself. It reports `"down"`, and raises an alert, when restarting has not worked.
 - **`unreviewedCases`:** referable cases that have never been reviewed, older than `unreviewedCaseHours`.
@@ -683,14 +685,15 @@ District admin. One call returns four checks: silent PHCs, stuck grading jobs, t
 District admin (401 with no session, 403 for any other role, like every `/admin` route). One item per row of `phc_sites`, ordered by name; `[]` when no site is registered.
 ```json
 [ { "phcId": "7b395269-…", "phcCode": "PHC001", "name": "PHC Kharadi", "district": null,
-    "lastSyncAt": "2026-09-26T11:39:54.594Z", "casesLast24h": 8,
-    "pendingOrFailedCount": 1, "status": "active" } ]
+    "lastSyncAt": "2026-09-26T11:39:54.594Z", "lastContactAt": "2026-09-26T11:41:02.114Z",
+    "casesLast24h": 8, "pendingOrFailedCount": 1, "status": "active" } ]
 ```
 - **`phcCode`, `district`:** `null` when not recorded. Nothing is guessed.
 - **`lastSyncAt`:** the latest case **central received** from that site, or `null` if it has never sent one. It is not `phc_sites.last_sync_at`, which keeps its own narrower meaning (full-sync completion, used by `GET /phc/:phcId/sync-status`).
 - **`casesLast24h`:** cases received from the site in the last 24 hours.
 - **`pendingOrFailedCount`:** what the PHC last reported as still queued (`pending_count`, accurate only as of its last contact) **plus** the site's cases whose grading failed here (status `error`).
-- **`status`:** `"silent"` when `lastSyncAt` is `null` or older than `PHC_SILENT_HOURS` (default 24), otherwise `"active"`. This is a different threshold from `silentPhcHours` in `GET /admin/system-health` (48 h, contact of any kind); the two answer different questions.
+- **`lastContactAt`:** `phc_sites.last_contact_at`, any authenticated contact from the site, or `null` if never.
+- **`status`:** `"silent"` when `lastContactAt` is `null` or older than `PHC_SILENT_HOURS` (default 24), otherwise `"active"`. One definition: it is exactly the rule behind `silentPhcs` and `thresholds.silentPhcHours` in `GET /admin/system-health`.
 - **The API key and its hash are never returned.**
 
 ### `GET /api/v1/phc/:phcId/sync-status`
