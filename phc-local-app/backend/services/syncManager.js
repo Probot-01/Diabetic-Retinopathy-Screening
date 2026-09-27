@@ -208,9 +208,11 @@ function buildCaseFields({ capture, patient, questionnaire, metadata }) {
   }
 
   // Lets the central server keep phc_sites.pending_count current, which is what
-  // the admin PHC Health screen reads. Counted BEFORE this upload succeeds, so
-  // it is the depth at the moment contact was made.
-  fields.pendingCount = String(countPending());
+  // the admin PHC Health screen reads. This capture is still 'pending' while it
+  // uploads, so it is left out: the number is what remains QUEUED BEHIND it. Counting
+  // it made the last upload of a session report 1, and central showed that stale 1
+  // as a backlog until the next contact.
+  fields.pendingCount = String(Math.max(0, countPending() - 1));
 
   return fields;
 }
