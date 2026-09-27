@@ -349,18 +349,25 @@ class CentralApiClient {
   }
 
   /**
-   * The contract has a per-site GET /api/v1/phc/:phcId/sync-status but no
-   * endpoint that lists every PHC, so live mode has nothing honest to return:
-   * this rejects, and the PHC Health page says so.
+   * Live: GET /api/v1/admin/phcs -> every PHC site with its recent activity
+   * (api-contracts.md, 2026-09-27). An empty array is a real answer (no site
+   * registered); a failure rejects and the page shows it as an error.
+   * Mock: the demo fixture, reshaped to the same fields.
    */
   async getPhcSyncStatuses() {
     if (USE_MOCK_DATA) {
       await delay(300);
-      return [...mockData.mockPhcSyncStatuses];
+      return mockData.mockPhcSyncStatuses.map((p) => ({
+        phcId: p.phcId, phcCode: p.phcId, name: p.phcName, district: null,
+        lastSyncAt: p.lastSyncAt, casesLast24h: 0, pendingOrFailedCount: p.pendingCount,
+        status: p.status === 'online' ? 'active' : 'silent',
+      }));
     }
-    throw new ApiError('not_available',
-      "The central API has no endpoint that lists every PHC's sync status (api-contracts.md defines only " +
-      'GET /api/v1/phc/:phcId/sync-status), so this table has no live data source yet.');
+    const data = await this._fetch('/api/v1/admin/phcs');
+    if (!Array.isArray(data)) {
+      throw new ApiError('bad_response', 'The PHC list response was not a list.');
+    }
+    return data;
   }
 
   // ── District Admin Resource Recommendations & System Health ──

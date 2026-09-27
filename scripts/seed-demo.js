@@ -120,10 +120,10 @@ async function run() {
       const { rows: [existing] } = await client.query(
         'SELECT phc_id FROM phc_sites WHERE name = $1 ORDER BY phc_id LIMIT 1', [s.name]);
       const { rows: [site] } = existing
-        ? await client.query('UPDATE phc_sites SET api_key_hash = $2 WHERE phc_id = $1 RETURNING phc_id',
-            [existing.phc_id, keyHash])
-        : await client.query('INSERT INTO phc_sites (name, api_key_hash) VALUES ($1, $2) RETURNING phc_id',
-            [s.name, keyHash]);
+        ? await client.query('UPDATE phc_sites SET api_key_hash = $2, phc_code = $3 WHERE phc_id = $1 RETURNING phc_id',
+            [existing.phc_id, keyHash, s.code])
+        : await client.query('INSERT INTO phc_sites (name, api_key_hash, phc_code) VALUES ($1, $2, $3) RETURNING phc_id',
+            [s.name, keyHash, s.code]);
       issuedSites.push({ ...s, phcId: site.phc_id, key });
     }
 

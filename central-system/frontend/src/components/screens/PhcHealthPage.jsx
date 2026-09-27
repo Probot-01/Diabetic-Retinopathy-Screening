@@ -27,46 +27,41 @@ const SortHeader = React.memo(({ label, field, sortKey, sortDir, onSort, alignRi
 });
 SortHeader.displayName = 'SortHeader';
 
-// Memoized row component for zero-lag rendering
+const HOUR_MS = 3_600_000;
+
+// One row of GET /admin/phcs. Only what the API says: nothing here is derived
+// into a score or a "total screened" the server did not send.
 const PhcRow = React.memo(({ phc }) => {
   const { t } = useTranslation();
-  const isOnline = phc.status === 'online';
-  const syncAge = phc.lastSyncAt ? (Date.now() - new Date(phc.lastSyncAt).getTime()) / 1000 / 60 : Infinity;
-  const healthScore = isOnline && phc.pendingCount < 5 ? t('central.phcHealth.table.good', 'GOOD') : isOnline ? t('central.phcHealth.table.degraded', 'DEGRADED') : t('central.phcHealth.table.offline', 'OFFLINE');
+  const isActive = phc.status === 'active';
+  const ageH = phc.lastSyncAt ? (Date.now() - new Date(phc.lastSyncAt).getTime()) / HOUR_MS : null;
 
   return (
-    <tr style={!isOnline ? { opacity: 0.85, background: 'rgba(0,0,0,0.02)' } : {}}>
+    <tr style={!isActive ? { opacity: 0.9, background: 'rgba(168, 34, 34, 0.05)' } : {}}>
       <td>
-        <div className={`sync-dot ${isOnline ? 'sync-dot--online' : 'sync-dot--offline'}`} />
+        <span className={`badge ${isActive ? 'badge--pass' : 'badge--fail'}`} data-testid="phc-status">
+          {isActive ? t('central.phcHealth.table.active', 'ACTIVE') : t('central.phcHealth.table.silent', 'SILENT')}
+        </span>
       </td>
-      <td className="t-mono" style={{ fontWeight: 700 }}>{phc.phcName}</td>
-      <td className="t-mono" style={{ color: 'var(--c-text-muted)', fontWeight: 500 }}>{phc.phcId}</td>
-      <td className="t-mono u-text-right" style={{ fontSize: 'var(--fs-tiny)', color: 'var(--c-text-muted)' }}>
+      <td className="t-mono" style={{ fontWeight: 700 }}>{phc.name}</td>
+      <td className="t-mono" style={{ color: 'var(--c-text-muted)', fontWeight: 500 }}>{phc.phcCode ?? '—'}</td>
+      <td className="t-mono" style={{ color: 'var(--c-text-muted)' }}>{phc.district ?? '—'}</td>
+      <td className="t-mono u-text-right" style={{ fontSize: 'var(--fs-tiny)', color: 'var(--c-text-muted)' }} data-testid="phc-last-sync">
         {phc.lastSyncAt
           ? new Date(phc.lastSyncAt).toLocaleString('en-IN', {
-              day: '2-digit',
-              month: 'short',
-              hour: '2-digit',
-              minute: '2-digit',
+              day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
             })
           : t('central.phcHealth.table.never', 'NEVER')}
-        {syncAge > 60 && syncAge < Infinity && (
+        {ageH !== null && ageH >= 1 && (
           <span style={{ color: 'var(--c-warning)', marginLeft: 'var(--sp-2)', fontWeight: 700 }}>
-            ({Math.round(syncAge / 60)}{t('central.phcHealth.table.hAgo', 'h ago')})
+            ({Math.round(ageH)}{t('central.phcHealth.table.hAgo', 'h ago')})
           </span>
         )}
       </td>
+      <td className="t-mono u-text-right" style={{ fontWeight: 700 }}>{phc.casesLast24h}</td>
       <td className="u-text-right">
-        <span className={`badge ${phc.pendingCount === 0 ? 'badge--pass' : phc.pendingCount > 5 ? 'badge--fail' : 'badge--warning'}`}>
-          {phc.pendingCount}
-        </span>
-      </td>
-      <td className="t-mono u-text-right" style={{ fontWeight: 700 }}>
-        {phc.totalScreened.toLocaleString()}
-      </td>
-      <td>
-        <span className={`badge ${healthScore === 'GOOD' ? 'badge--pass' : healthScore === 'DEGRADED' ? 'badge--warning' : 'badge--fail'}`}>
-          {healthScore}
+        <span className={`badge ${phc.pendingOrFailedCount === 0 ? 'badge--pass' : phc.pendingOrFailedCount > 5 ? 'badge--fail' : 'badge--warning'}`}>
+          {phc.pendingOrFailedCount}
         </span>
       </td>
     </tr>
@@ -118,18 +113,16 @@ export const PhcHealthPage = () => {
     });
   }, []);
 
-  const onlineCount = useMemo(() => phcList.filter(p => p.status === 'online').length, [phcList]);
-  const offlineCount = useMemo(() => phcList.length - onlineCount, [phcList, onlineCount]);
-  const silentCount = useMemo(() => phcList.filter(p => p.hoursSilent >= 48).length, [phcList]);
-  const totalPending = useMemo(() => phcList.reduce((sum, p) => sum + p.pendingCount, 0), [phcList]);
-  const totalScreened = useMemo(() => phcList.reduce((sum, p) => sum + p.totalScreened, 0), [phcList]);
+  const activeCount = useMemo(() => phcList.filter(p => p.status === 'active').length, [phcList]);
+  const silentCount = useMemo(() => phcList.filter(p => p.status === 'silent').length, [phcList]);
+  const totalPending = useMemo(() => phcList.reduce((sum, p) => sum + p.pendingOrFailedCount, 0), [phcList]);
+  const totalCases24h = useMemo(() => phcList.reduce((sum, p) => sum + p.casesLast24h, 0), [phcList]);
 
   const processedPhcs = useMemo(() => {
     let list = phcList;
-    if (statusFilter === 'online') list = list.filter(p => p.status === 'online');
-    if (statusFilter === 'offline') list = list.filter(p => p.status === 'offline');
-    if (statusFilter === 'silent') list = list.filter(p => p.hoursSilent >= 48);
-    if (statusFilter === 'pending') list = list.filter(p => p.pendingCount > 0);
+    if (statusFilter === 'active') list = list.filter(p => p.status === 'active');
+    if (statusFilter === 'silent') list = list.filter(p => p.status === 'silent');
+    if (statusFilter === 'pending') list = list.filter(p => p.pendingOrFailedCount > 0);
 
     if (sortConfig.direction === 'none' || !sortConfig.key) {
       return list;
@@ -312,30 +305,17 @@ export const PhcHealthPage = () => {
             {t('central.phcHealth.filters.all', 'ALL')} ({phcList.length})
           </button>
           <button
-            onClick={() => setStatusFilter(statusFilter === 'online' ? 'all' : 'online')}
-            className={`badge badge--pass ${statusFilter === 'online' ? 'badge--active' : ''}`}
+            onClick={() => setStatusFilter(statusFilter === 'active' ? 'all' : 'active')}
+            className={`badge badge--pass ${statusFilter === 'active' ? 'badge--active' : ''}`}
             style={{
               cursor: 'pointer',
-              border: statusFilter === 'online' ? '2px solid #000' : '1px solid currentColor',
-              boxShadow: statusFilter === 'online' ? '3px 3px 0px #000' : 'none',
-              transform: statusFilter === 'online' ? 'translate(-1px, -1px)' : 'none',
+              border: statusFilter === 'active' ? '2px solid #000' : '1px solid currentColor',
+              boxShadow: statusFilter === 'active' ? '3px 3px 0px #000' : 'none',
+              transform: statusFilter === 'active' ? 'translate(-1px, -1px)' : 'none',
             }}
-            title="Filter by Online PHCs"
+            title="Filter by active PHCs (sent a case within the window)"
           >
-            {onlineCount} {t('central.phcHealth.filters.online', 'ONLINE')}
-          </button>
-          <button
-            onClick={() => setStatusFilter(statusFilter === 'offline' ? 'all' : 'offline')}
-            className={`badge badge--fail ${statusFilter === 'offline' ? 'badge--active' : ''}`}
-            style={{
-              cursor: 'pointer',
-              border: statusFilter === 'offline' ? '2px solid #000' : '1px solid currentColor',
-              boxShadow: statusFilter === 'offline' ? '3px 3px 0px #000' : 'none',
-              transform: statusFilter === 'offline' ? 'translate(-1px, -1px)' : 'none',
-            }}
-            title="Filter by Offline PHCs"
-          >
-            {offlineCount} {t('central.phcHealth.filters.offline', 'OFFLINE')}
+            {activeCount} {t('central.phcHealth.filters.active', 'ACTIVE')}
           </button>
           <button
             onClick={() => setStatusFilter(statusFilter === 'silent' ? 'all' : 'silent')}
@@ -349,9 +329,9 @@ export const PhcHealthPage = () => {
               boxShadow: statusFilter === 'silent' ? '3px 3px 0px #000' : 'none',
               transform: statusFilter === 'silent' ? 'translate(-1px, -1px)' : 'none',
             }}
-            title="Filter by Silent PHCs (>48h with no contact)"
+            title="Filter by silent PHCs (no case received within the configured window)"
           >
-            ⚠ {silentCount} SILENT (&gt;48h)
+            ⚠ {silentCount} SILENT
           </button>
           <button
             onClick={() => setStatusFilter(statusFilter === 'pending' ? 'all' : 'pending')}
@@ -380,13 +360,13 @@ export const PhcHealthPage = () => {
         </div>
         <div className="bento--span-4">
           <div className="stat" style={{ border: '1px solid rgba(0,0,0,0.08)', boxShadow: '4px 4px 0px var(--c-crimson)' }}>
-            <div className="stat__label">{t('central.phcHealth.stats.totalScreened', 'TOTAL SCREENED')}</div>
-            <div className="stat__value">{totalScreened.toLocaleString()}</div>
+            <div className="stat__label">{t('central.phcHealth.stats.cases24h', 'CASES (LAST 24H)')}</div>
+            <div className="stat__value">{totalCases24h.toLocaleString()}</div>
           </div>
         </div>
         <div className="bento--span-4">
           <div className="stat" style={{ border: '1px solid rgba(0,0,0,0.08)', boxShadow: '4px 4px 0px var(--c-crimson)' }}>
-            <div className="stat__label">{t('central.phcHealth.stats.pendingSync', 'PENDING SYNC')}</div>
+            <div className="stat__label">{t('central.phcHealth.stats.pendingSync', 'PENDING OR FAILED')}</div>
             <div className="stat__value" style={{ color: totalPending > 0 ? 'var(--c-crimson-dark)' : 'var(--c-success)' }}>
               {totalPending}
             </div>
@@ -399,59 +379,22 @@ export const PhcHealthPage = () => {
         <table className="table">
           <thead>
             <tr>
-              <SortHeader
-                label={t('central.phcHealth.table.colStatus', 'STATUS')}
-                field="status"
-                sortKey={sortConfig.key}
-                sortDir={sortConfig.direction}
-                onSort={handleSort}
-              />
-              <SortHeader
-                label={t('central.phcHealth.table.colPhcName', 'PHC NAME')}
-                field="phcName"
-                sortKey={sortConfig.key}
-                sortDir={sortConfig.direction}
-                onSort={handleSort}
-              />
-              <SortHeader
-                label={t('central.phcHealth.table.colPhcId', 'PHC ID')}
-                field="phcId"
-                sortKey={sortConfig.key}
-                sortDir={sortConfig.direction}
-                onSort={handleSort}
-              />
-              <SortHeader
-                label={t('central.phcHealth.table.colLastSync', 'LAST SYNC')}
-                field="lastSyncAt"
-                sortKey={sortConfig.key}
-                sortDir={sortConfig.direction}
-                onSort={handleSort}
-                alignRight={true}
-              />
-              <SortHeader
-                label={t('central.phcHealth.table.colPending', 'PENDING')}
-                field="pendingCount"
-                sortKey={sortConfig.key}
-                sortDir={sortConfig.direction}
-                onSort={handleSort}
-                alignRight={true}
-              />
-              <SortHeader
-                label={t('central.phcHealth.table.colTotal', 'TOTAL SCREENED')}
-                field="totalScreened"
-                sortKey={sortConfig.key}
-                sortDir={sortConfig.direction}
-                onSort={handleSort}
-                alignRight={true}
-              />
-              <th>{t('central.phcHealth.table.colHealth', 'HEALTH')}</th>
+              <SortHeader label={t('central.phcHealth.table.colStatus', 'STATUS')} field="status" sortKey={sortConfig.key} sortDir={sortConfig.direction} onSort={handleSort} />
+              <SortHeader label={t('central.phcHealth.table.colPhcName', 'PHC NAME')} field="name" sortKey={sortConfig.key} sortDir={sortConfig.direction} onSort={handleSort} />
+              <SortHeader label={t('central.phcHealth.table.colPhcCode', 'CODE')} field="phcCode" sortKey={sortConfig.key} sortDir={sortConfig.direction} onSort={handleSort} />
+              <SortHeader label={t('central.phcHealth.table.colDistrict', 'DISTRICT')} field="district" sortKey={sortConfig.key} sortDir={sortConfig.direction} onSort={handleSort} />
+              <SortHeader label={t('central.phcHealth.table.colLastSync', 'LAST SYNC')} field="lastSyncAt" sortKey={sortConfig.key} sortDir={sortConfig.direction} onSort={handleSort} alignRight={true} />
+              <SortHeader label={t('central.phcHealth.table.colCases24h', 'CASES 24H')} field="casesLast24h" sortKey={sortConfig.key} sortDir={sortConfig.direction} onSort={handleSort} alignRight={true} />
+              <SortHeader label={t('central.phcHealth.table.colPending', 'PENDING / FAILED')} field="pendingOrFailedCount" sortKey={sortConfig.key} sortDir={sortConfig.direction} onSort={handleSort} alignRight={true} />
             </tr>
           </thead>
           <tbody>
             {processedPhcs.length === 0 ? (
               <tr>
-                <td colSpan="7" style={{ textAlign: 'center', padding: 'var(--sp-8)', color: 'var(--c-text-muted)' }}>
-                  {t('central.phcHealth.table.empty', 'NO PHCs MATCH THE SELECTED FILTER')}
+                <td colSpan="7" style={{ textAlign: 'center', padding: 'var(--sp-8)', color: 'var(--c-text-muted)' }} data-testid="phc-empty">
+                  {phcList.length === 0
+                    ? t('central.phcHealth.table.noneRegistered', 'NO PHC SITES ARE REGISTERED ON THIS SERVER YET. A site appears here once an administrator provisions it.')
+                    : t('central.phcHealth.table.empty', 'NO PHCs MATCH THE SELECTED FILTER')}
                 </td>
               </tr>
             ) : (
