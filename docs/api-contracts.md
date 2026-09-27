@@ -21,6 +21,8 @@ plans have to be re-checked against it, and a silent edit makes that impossible.
 
 **2026-09-27 (demo prep) — One definition of a silent PHC.** `GET /admin/system-health` counted a site silent after 48 h without any contact (`SILENT_PHC_HOURS`); `GET /admin/phcs` after 24 h without a *case* (`PHC_SILENT_HOURS`). The two screens could disagree on the same site. Both now use one rule, in `services/phcSilence.js`: no contact of any kind within `PHC_SILENT_HOURS` (default 24), or never. Changes: `thresholds.silentPhcHours` default 48 -> 24; `/admin/phcs` `status` is derived from contact, not from the last case; `/admin/phcs` items gain `lastContactAt`; env `SILENT_PHC_HOURS` is removed and ignored.
 
+Also: the `pendingCount` a PHC sends with a case now excludes the capture being uploaded (it is what remains queued behind it). It used to include it, so the last upload of a session left `phc_sites.pending_count = 1` and PHC Health showed a phantom backlog. Also: the UI shows every date and time in IST (Asia/Kolkata); Case detail shows `patientReference` as the case identifier and reads "NOT COMPUTED" for `uncertaintyScore`/consistency when null; the Resources page says "Simulation results not yet generated" until the Simulink output exists.
+
 **2026-09-27 (later) — `GET /api/v1/admin/phcs`.** Lists every PHC site with its recent activity (district_admin). It gives the PHC Health page a real data source; that table used to say "no live data source yet". Adds nullable `phc_sites.phc_code` and `phc_sites.district` (migration 0020); both are reported as `null` until someone records them. New optional env `PHC_SILENT_HOURS` (default 24).
 
 **2026-09-27 — Reviewer and admin flows, verified against real cases.**
