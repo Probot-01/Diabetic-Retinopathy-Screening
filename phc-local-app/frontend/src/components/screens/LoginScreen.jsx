@@ -9,8 +9,11 @@ export const LoginScreen = ({ onLogin }) => {
   const [isTransitioning, setIsTransitioning] = useState(false);
 
   // Technician credentials
-  const [username, setUsername] = useState('krrish');
-  const [password, setPassword] = useState('tech123');
+  // The demo pair is prefilled only in mock mode. Against the real backend the
+  // account is one created on this PC (`npm run technician -- add ...`), so nothing
+  // is prefilled and no password is printed on screen.
+  const [username, setUsername] = useState(USE_MOCK_DATA ? 'krrish' : '');
+  const [password, setPassword] = useState(USE_MOCK_DATA ? 'tech123' : '');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -157,11 +160,13 @@ export const LoginScreen = ({ onLogin }) => {
                 {loading ? t('login.auth.authenticating', 'AUTHENTICATING...') : t('login.auth.initiate', 'INITIATE SESSION ✦')}
               </button>
 
-              <div className="login-auth-hint">
-                {t('login.auth.demo', 'DEMO CREDENTIALS:')}{' '}
-                <span style={{ fontWeight: 700, color: 'var(--c-crimson)' }}>krrish</span> /{' '}
-                <span style={{ fontWeight: 700, color: 'var(--c-crimson)' }}>tech123</span>
-              </div>
+              {USE_MOCK_DATA && (
+                <div className="login-auth-hint">
+                  {t('login.auth.demo', 'DEMO CREDENTIALS:')}{' '}
+                  <span style={{ fontWeight: 700, color: 'var(--c-crimson)' }}>krrish</span> /{' '}
+                  <span style={{ fontWeight: 700, color: 'var(--c-crimson)' }}>tech123</span>
+                </div>
+              )}
             </form>
           </div>
         </div>
