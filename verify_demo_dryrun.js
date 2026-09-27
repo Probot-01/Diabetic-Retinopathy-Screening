@@ -190,7 +190,22 @@ async function main() {
     const anonImg = await fetch(BASE + imgUrl);
     const authImg = await oph.go('GET', imgUrl);
     console.log(`  /media anonymous -> ${anonImg.status}, with session -> ${authImg.status}`);
+    check('/media refuses an anonymous request', anonImg.status === 401, `status ${anonImg.status}`);
+    // ASSERTED, not printed. This used to be a console.log next to a check
+    // that only tested whether a URL STRING existed, so a 500 here passed
+    // silently -- and 500 is exactly what an unset MEDIA_ENCRYPTION_KEY
+    // produces (media_not_encrypted: the route refuses to serve a patient
+    // image that is sitting unencrypted on disk). The reviewer screen is a
+    // fundus image and a Grad-CAM; a demo where neither loads is not a demo.
+    check('the fundus image actually loads for the reviewer', authImg.status === 200,
+      `status ${authImg.status}. 500 with media_not_encrypted means MEDIA_ENCRYPTION_KEY `
+      + 'is unset (or media predates it): set it and run scripts/encryptMedia.js.');
     check('the Grad-CAM overlay exists', !!camUrl, String(camUrl));
+    if (camUrl) {
+      const authCam = await oph.go('GET', camUrl);
+      check('the Grad-CAM overlay actually loads', authCam.status === 200,
+        `status ${authCam.status}`);
+    }
   }
 
   // ── 7. claiming ─────────────────────────────────────────────────────────

@@ -226,7 +226,33 @@ async function main() {
       un && un.tier === 'C' && un.hoursUnreviewed >= 71, un);
     check('a referable case received 1 hour ago is not (yet)',
       !h.unreviewedCases.some((c) => c.caseId === recent));
-    check('thresholds are reported for the UI', h.thresholds && h.thresholds.silentPhcHours === 48);
+    // 24, not 48: the 2026-09-27 demo-prep change gave /admin/system-health and
+    // /admin/phcs ONE definition of a silent PHC (services/phcSilence.js, env
+    // PHC_SILENT_HOURS) because the two screens could disagree about the same
+    // site. api-contracts.md records the change and its response example says
+    // 24. This assertion still said 48 and had been failing ever since.
+    // A GRADED CASE MUST NOT CARRY A FAILURE. A case reaches 'graded' after
+    // having failed whenever the queue retries it, the watchdog recovers it,
+    // or someone re-grades it by hand. The orchestrator's success UPDATE used
+    // to leave failure_code / failure_reason / failed_at behind, so the row
+    // said "graded" and getCaseDetail -- which serves failure_code straight,
+    // with no status check -- reported the old reason as this case's own.
+    // api-contracts.md: failureCode is "null on every case that has not
+    // failed". /admin/system-health filters on status='error' and was never
+    // wrong, which is exactly why nothing caught this.
+    const dirty = (await pool.query(`
+      SELECT count(*)::int n FROM cases
+       WHERE status = 'graded'
+         AND (failure_code IS NOT NULL OR failure_reason IS NOT NULL OR failed_at IS NOT NULL)`)).rows[0].n;
+    check('no graded case still carries a failure code, reason or timestamp',
+      dirty === 0,
+      `${dirty} graded case(s) carry failure fields. Re-grading clears them now; rows `
+      + 'from before that fix need one UPDATE.');
+
+    check('thresholds are reported for the UI',
+      h.thresholds && h.thresholds.silentPhcHours === 24
+      && h.thresholds.stuckJobMinutes === 15 && h.thresholds.unreviewedCaseHours === 48,
+      h.thresholds);
 
     const sync = await (await fetch(`${BASE}/api/v1/phc/${siteId}/sync-status`)).json();
     check('PHC sync-status now also carries lastContactAt', 'lastContactAt' in sync && sync.lastContactAt, sync);

@@ -8,6 +8,8 @@ import { GradCamOverlay } from './GradCamOverlay';
 import { LesionEvidencePanel } from './LesionEvidencePanel';
 import { BranchComparisonPanel } from './BranchComparisonPanel';
 import { ProvenancePanel } from './ProvenancePanel';
+import { CaseStatusBanner } from './CaseStatusBanner';
+import { LesionAttentionMetric } from './LesionAttentionMetric';
 import { DecisionControls, describeOutcome } from './DecisionControls';
 import { CaseHistoryTimeline } from './CaseHistoryTimeline';
 import { InfoBanner } from '../shared/InfoBanner';
@@ -262,6 +264,12 @@ export const CaseDetailPage = () => {
         </div>
       </div>
 
+      {/* Whether this case HAS a grade at all. A failed case and one still
+          being graded both render every ML field as null, so without this
+          they read identically -- which api-contracts.md explicitly forbids.
+          Renders nothing once the case is graded. */}
+      <CaseStatusBanner caseData={c} />
+
       <InfoBanner title={t('central.caseDetail.banner.title', 'CLINICAL REVIEW GUIDANCE')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <div><strong style={{ color: 'var(--c-crimson)' }}>CONFIDENCE:</strong> The confidence score shows the model's certainty. Lower scores should be scrutinized closely.</div>
@@ -311,11 +319,12 @@ export const CaseDetailPage = () => {
               value={c.uncertaintyScore}
               color="var(--c-warning)"
             />
-            <MetricBar
-              label={t('central.caseDetail.metrics.lesionConsistency', 'LESION-ATTENTION CONSISTENCY')}
-              value={c.lesionAttentionConsistencyScore}
-              color={c.lesionAttentionConsistencyScore !== null && c.lesionAttentionConsistencyScore > 0.6 ? 'var(--c-success)' : 'var(--c-crimson)'}
-            />
+            {/* NOT a MetricBar. The consistency score is an overlap fraction
+                and is meaningless without its chance level -- a bar coloured
+                red below 0.6 called a good heatmap on a lightly-diseased eye a
+                failure. LesionAttentionMetric shows the comparison instead,
+                and takes its pass/fail from the backend's own flag. */}
+            <LesionAttentionMetric caseData={c} />
           </div>
         </div>
 
@@ -340,11 +349,36 @@ export const CaseDetailPage = () => {
                   {c.patientReference || 'N/A'}
                 </p>
               </div>
+              {/* WHICH EYE, and on whose word. The image file's own DICOM tag
+                  wins over the technician's selection when both exist (SS10.4),
+                  and a DISAGREEMENT between them is surfaced rather than
+                  resolved silently -- filing a grade against the wrong eye is
+                  not a cosmetic error. The backend has served the source and
+                  the mismatch flag all along; this tile printed the winning
+                  value alone, which hid both. */}
               <div style={{ padding: 'var(--sp-3)', borderBottom: 'var(--border)' }}>
                 <span className="t-label" style={{ opacity: 0.5 }}>EYE</span>
                 <p className="t-mono" style={{ fontWeight: 700, textTransform: 'uppercase' }}>
                   {c.eyeLaterality || 'N/A'}
+                  {c.eyeLateralityMismatch === true && (
+                    <span
+                      className="badge badge--fail"
+                      style={{ marginLeft: 'var(--sp-2)' }}
+                      data-testid="eye-laterality-mismatch"
+                      title={'The image file reports one eye and the technician selected '
+                        + 'the other. The value shown is the file’s, which wins, but the '
+                        + 'disagreement is unresolved: confirm which eye this is before '
+                        + 'acting on the grade.'}
+                    >
+                      &#9888; DISPUTED
+                    </span>
+                  )}
                 </p>
+                <span className="t-mono" style={{ fontSize: 'var(--fs-tiny)', opacity: 0.55 }}>
+                  {c.eyeLateralitySource === 'dicom' ? 'from the image file’s own DICOM tag'
+                    : c.eyeLateralitySource === 'technician' ? 'as selected by the technician'
+                    : 'not recorded'}
+                </span>
               </div>
               <div style={{ padding: 'var(--sp-3)', borderRight: 'var(--border)' }}>
                 <span className="t-label" style={{ opacity: 0.5 }}>{t('central.caseDetail.context.diabetesDuration', 'DIABETES DURATION')}</span>
