@@ -9,7 +9,7 @@ Status as of 2026-09-23 (late). Sections marked "Since 2026-09-22" and the "Wait
 | L | Migration tooling (node-pg-migrate). `schema.sql` is now migration 0001, and all later changes are migrations 0002–0009. | Done | `npm run migrate` |
 | A.1–A.13 | Login (httpOnly cookie), CSRF, bcrypt, seed users, role guards on every route, `AUTH_ENABLED` flag, 12 h JWT, PHC API keys plus a provisioning script, access log | Done | `verify_backend_auth.js` (53 checks) |
 | A.14 | TLS: optional HTTPS at TLS 1.2+ (`TLS_KEY_PATH` / `TLS_CERT_PATH`), plus a self-signed dev certificate from `scripts/generateDevCert.js` | Done | HTTPS served; TLS 1.1 and plain HTTP refused |
-| A.15 | Encryption at rest | **Not done. Deployment action needed; see below.** | none |
+| A.15 | Encryption at rest | **Media files: done (2026-09-27).** `MEDIA_ENCRYPTION_KEY` is set and all 646 files under `media/` are AES-256-GCM encrypted; `/media` refuses to serve a plaintext patient image. **Database and SQLite: still the OS-level deployment action below.** | served image byte-identical to the original (SHA-256); `/media` 200 with a session, 401 without |
 | B.1 | `GET /api/v1/patients/search`. The desktop app also gets the same endpoint on its local backend, for offline use. | Done | auth suite plus local test |
 | B.2 | `POST /cases/:id/claim`: one conditional UPDATE, 30-minute expiry, 409 names who holds it | Done | auth suite |
 | B.3 | `GET /cases/:id/reviews` | Done | auth suite |
@@ -102,7 +102,14 @@ ingestion response gained fields; sync-status gained `lastContactAt`) and were
 updated. One was failing before any of this work, on a missing `sharp`
 install, and one assumed a database with no sync history; both fixed.
 
-## Flagged explicitly (plan §A.15): encryption at rest is NOT in place
+## Flagged explicitly (plan §A.15): the OS-level half is still not in place
+
+*Updated 2026-09-28.* The application half is done: case media is encrypted at
+rest by `services/mediaCrypto.js`, and the `/media` route refuses to serve a
+file that is sitting in plaintext rather than quietly handing it out. That
+covers the stored images, which were the largest body of patient data on disk.
+What remains below is the Postgres data directory and the PHC's SQLite file,
+which no application code can encrypt.
 
 The plan's own corrected guidance: self-hosted Postgres has no built-in transparent data encryption. For this round the real mechanism is **full-disk encryption at the OS level**. It needs no application code, so it cannot be done from the repository.
 

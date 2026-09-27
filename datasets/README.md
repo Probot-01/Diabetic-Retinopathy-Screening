@@ -1,8 +1,14 @@
 # Datasets
 
-**None of these are in git, and none are currently downloaded.** `datasets/`
-holds five loose sample fundus images used for smoke-testing and nothing else.
-Everything below has to be fetched by hand before the tasks that need it can run.
+**None of these are in git.** They are fetched by hand per machine.
+
+> **Status on this checkout, 2026-09-28:** DRIVE, IDRiD (grading, segmentation and
+> localization) and CHASE_DB1 **are present**. The table below still reads
+> "not downloaded" from when none of them were; treat the table as the list of
+> what each dataset unblocks, not as the current state. `datasets/` also holds
+> five loose sample fundus images (`1.webp`…`5.jpg`) used for smoke tests —
+> `scripts/seedTestCase.js` defaults to `2.jpg`, which is why a seeded database
+> can look like many cases of one eye.
 
 This file is the blocker for Phase 4. Tasks 4.1–4.3 train U-Nets and cannot
 start without DRIVE and IDRiD.
