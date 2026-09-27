@@ -528,7 +528,7 @@ async function getCaseDetail(caseId) {
       p.patient_reference,
       g.dr_grade_cnn, g.dr_grade_rule_engine, g.branch_agreement,
       c.source_format, c.dicom_device_model, c.camera_device_id,
-      c.camera_family_detected,
+      c.camera_family_detected, c.camera_mismatch, c.camera_expected_family,
       g.confidence_score, g.uncertainty_score, g.conformal_tier, g.tier_reason,
       g.model_version, g.urgency_score, g.urgency_factor, g.urgency_inputs,
       g.claimed_by, g.claimed_at, claimant.name AS claimed_by_name,
@@ -611,6 +611,14 @@ async function getCaseDetail(caseId) {
     dicomDeviceModel:  r.dicom_device_model ?? null,
     cameraDeviceReported: r.camera_device_id ?? null,
     cameraFamilyDetected: r.camera_family_detected ?? null,
+    // The reported-vs-detected cross-check (migration 0021), three-state on
+    // purpose: true disagreed, false agreed, null the check could not run
+    // because no expected family was known for the reported device. A null is
+    // NOT an agreement -- classifyCameraFamily.m returns false in both the
+    // "agreed" and the "nothing to compare" case, and only one of those is a
+    // statement about this camera.
+    cameraMismatch:       r.camera_mismatch ?? null,
+    cameraExpectedFamily: r.camera_expected_family ?? null,
     // WHY this tier -- the escalation that fired, or the floor that raised it
     // from A. Five different situations produce a "B", and they call for
     // different things from the reviewer: "the model is unsure" is not the

@@ -312,6 +312,52 @@ class LocalApiClient {
     }
     return data;
   }
+
+  /**
+   * getPeerDevices() -> GET /peer/devices
+   *
+   * The phones paired with this PC (docs/peer-sync-protocol.md). A pairing key
+   * reads every patient record on this machine, so the list of who holds one
+   * is operational safety information, not a diagnostic curiosity.
+   *
+   * Returns [{ deviceId, name, createdAt, lastSeenAt, revokedAt }]. A revoked
+   * device stays in the list with revokedAt set -- the record of a phone that
+   * once had access does not get deleted.
+   */
+  async getPeerDevices() {
+    if (this.useMock) {
+      await delay(200);
+      return mockData.mockPeerDevices.map((d) => ({ ...d }));
+    }
+    const data = await this._request('/peer/devices');
+    if (!Array.isArray(data)) {
+      throw new ApiError('bad_response', 'The paired-devices response was not a list.');
+    }
+    return data;
+  }
+
+  /**
+   * revokePeerDevice(deviceId) -> POST /peer/devices/:id/revoke
+   *
+   * Cuts a phone off from this PC. Admin-only on the backend
+   * (requireTechnician.admin), which is the authority -- the UI hiding the
+   * button is a convenience, not the control.
+   *
+   * Resolves on the backend's 204. Mock mode REFUSES rather than pretending:
+   * revoking is a security action, and a demo that reports success without a
+   * backend would teach an operator that a phone is cut off when it is not.
+   */
+  async revokePeerDevice(deviceId) {
+    if (this.useMock) {
+      throw new ApiError('mock_mode',
+        'This is demo data. A paired phone can only really be revoked against the '
+        + 'live PHC backend, so this action is refused here rather than reported '
+        + 'as done.');
+    }
+    if (!deviceId) throw new ApiError('invalid_field', 'A device id is required to revoke.');
+    await this._request(`/peer/devices/${encodeURIComponent(deviceId)}/revoke`, { method: 'POST' });
+    return true;
+  }
 }
 
 export const localApi = new LocalApiClient();

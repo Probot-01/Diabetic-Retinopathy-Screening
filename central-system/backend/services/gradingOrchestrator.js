@@ -892,6 +892,12 @@ async function gradeCase(caseId, plainImagePath) {
   // override chain below) — an established camera/site's occasional mismatch
   // stays a log line, same as before; the previous behaviour ("never changes
   // the grading") now only holds once this camera/site has a track record.
+  // The stored, three-state form of the same check (migration 0021). The
+  // console.warn below and the probation override are both lossy: the override
+  // only writes a tier_reason while the tier would otherwise be A AND the
+  // camera/site is still on probation, so on an established camera, or on a
+  // case already in Tier B/C, the mismatch used to reach nobody.
+  const cameraCheck = readCameraCheck(mlResult);
   const cameraProbationOverride = mlResult.cameraMismatch === true
     && !cameraSiteProbationCleared;
   if (mlResult.cameraMismatch) {
@@ -1180,11 +1186,13 @@ async function gradeCase(caseId, plainImagePath) {
     // now nothing stored them, while readFundusImage.m's header claimed the
     // device "is recorded as evidence".
     `UPDATE cases SET status = 'graded', camera_family_detected = $2,
-       eye_laterality_detected = $3, source_format = $4, dicom_device_model = $5
+       eye_laterality_detected = $3, source_format = $4, dicom_device_model = $5,
+       camera_mismatch = $6, camera_expected_family = $7
      WHERE case_id = $1`,
     [caseId, fromMatlab(mlResult.cameraFamily), detectedLaterality,
      blankToNull(fromMatlab(mlResult.sourceFormat)),
-     blankToNull(fromMatlab(mlResult.dicomDeviceModel))]);
+     blankToNull(fromMatlab(mlResult.dicomDeviceModel)),
+     cameraCheck.mismatch, cameraCheck.expectedFamily]);
 
   console.log(`[gradingOrchestrator] case ${caseId}: grade=${grade}, `
     + `confidence=${confidenceScore.toFixed(4)}, tier=${tier}, `
@@ -1276,6 +1284,33 @@ function blankToNull(v) {
   if (typeof v !== 'string') return v ?? null;
   const t = v.trim();
   return t === '' ? null : t;
+}
+
+/**
+ * readCameraCheck(mlResult) -- the reported-vs-detected camera cross-check as
+ * the three states migration 0021 stores, not the two the engines return.
+ *
+ * classifyCameraFamily.m can only compare the detected family against the
+ * family the reported device implies when that device is in
+ * calibrationProfiles.json's deviceAssociations. When it is not -- an
+ * unrecognised dropdown value, or no device reported at all -- it has nothing
+ * to compare against and returns mismatch = false.
+ *
+ * That false means "not checked". Storing it as false would record that this
+ * camera was verified against its own image, about a case where nobody could
+ * look. So the checkability test is expectedFamily, not mismatch:
+ *
+ *   expectedFamily non-empty -> the check ran; mismatch is its real answer
+ *   expectedFamily empty     -> NULL, and no expected family to show
+ *
+ * cameraExpectedFamily was added to runCasePipeline.m's output for exactly
+ * this; a result from an older engine that does not carry it is not-checkable
+ * by the same rule, which is the safe reading of a missing field.
+ */
+function readCameraCheck(mlResult) {
+  const expected = blankToNull(fromMatlab(mlResult.cameraExpectedFamily));
+  if (expected === null) return { mismatch: null, expectedFamily: null };
+  return { mismatch: mlResult.cameraMismatch === true, expectedFamily: expected };
 }
 
 const REGISTERED_MODELS = new Set();

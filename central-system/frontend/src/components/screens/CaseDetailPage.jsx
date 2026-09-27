@@ -7,6 +7,7 @@ import { drGradeLabels } from '../../api/mockData';
 import { GradCamOverlay } from './GradCamOverlay';
 import { LesionEvidencePanel } from './LesionEvidencePanel';
 import { BranchComparisonPanel } from './BranchComparisonPanel';
+import { ProvenancePanel } from './ProvenancePanel';
 import { DecisionControls, describeOutcome } from './DecisionControls';
 import { CaseHistoryTimeline } from './CaseHistoryTimeline';
 import { InfoBanner } from '../shared/InfoBanner';
@@ -388,18 +389,15 @@ export const CaseDetailPage = () => {
                     : 'N/A'}
                 </p>
               </div>
-              {/* Which engine ran the PHC's quality gate (engineProvenance.qualityGate).
-                  null is shown as "not recorded", never guessed. */}
-              <div style={{ padding: 'var(--sp-3)', borderTop: 'var(--border)', gridColumn: '1 / -1' }}>
-                <span className="t-label" style={{ opacity: 0.5 }}>QUALITY GATE ENGINE</span>
-                <p className="t-mono" style={{ fontWeight: 700 }} title={c.engineProvenance?.qualityGate?.detail || undefined}>
-                  {c.engineProvenance?.qualityGate
-                    ? `${c.engineProvenance.qualityGate.engine.toUpperCase()}${c.engineProvenance.qualityGate.fallback ? ' (FALLBACK)' : ''}`
-                    : 'NOT RECORDED'}
-                </p>
-              </div>
             </div>
           </div>
+
+          {/* WHICH ENGINE produced each output, the classifier build behind the
+              grade, and what the image file says about itself. The quality-gate
+              engine used to sit as a lone tile in the context grid above; it is
+              one of seven engine entries the backend records, so it now lives
+              with the other six instead of standing in for them. */}
+          <ProvenancePanel caseData={c} />
         </div>
       </div>
 

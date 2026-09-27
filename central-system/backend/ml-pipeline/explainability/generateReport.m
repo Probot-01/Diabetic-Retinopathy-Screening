@@ -12,7 +12,13 @@ function outPath = generateReport(inputJsonPath, outPath)
 %   drGradeCnn, confidenceScore, conformalTier, tierReason (optional),
 %   drGradeRuleEngine, branchAgreement,
 %   lesionCounts {red, bright, redTotal, brightTotal},  nvSuspicionScore,
-%   evidenceSummaryText, generatedAt
+%   evidenceSummaryText, generatedAt,
+%   modelVersion, provenanceRows [{label, engine, fallback, detail}]
+%
+% provenanceRows is flattened by the Node side (services/caseReport.js) into a
+% uniform array so jsondecode yields a struct array, not a nested object with
+% optional nulls to interrogate field by field. It is empty when no engine was
+% recorded for this case, which the report states rather than papers over.
 %
 % Any field may be null; a null prints as "not available", never as 0 -- the
 % same not-measured-vs-measured-zero rule as the rest of the pipeline.
@@ -188,6 +194,60 @@ append(d, body(['Red lesions are counted as one class: the segmentation model do
 
 append(d, heading('Evidence summary'));
 append(d, body(str(get('evidenceSummaryText')), '9pt'));
+
+% ── How this result was produced ───────────────────────────────────────────
+% The report leaves the system and goes into a patient record, so it carries
+% its own provenance: which classifier build, and which engine produced each
+% output. Whoever reads it later will not have the reviewer console open.
+%
+% provenanceRows arrives already flattened by services/caseReport.js as a
+% uniform array of {label, engine, fallback, detail}, so jsondecode gives a
+% struct array to loop over. Outputs nobody recorded are omitted there; when
+% NOTHING was recorded the array is empty and that is said in one line.
+append(d, heading('How this result was produced'));
+append(d, body(sprintf('Classifier model build: %s', str(get('modelVersion')))));
+
+rowsProv = get('provenanceRows');
+if isempty(rowsProv)
+    append(d, body(['The engine that produced each output was not recorded for this ' ...
+                    'case. That is a gap in the record, not a statement that any ' ...
+                    'particular engine ran.'], '9pt'));
+else
+    provCells = cell(numel(rowsProv), 3);
+    anyFallback = false;
+    for k = 1:numel(rowsProv)
+        r = rowsProv(k);
+        engineTxt = upper(str(r.engine));
+        if isequal(r.fallback, true)
+            engineTxt = [engineTxt ' (FALLBACK)'];   %#ok<AGROW>
+            anyFallback = true;
+        end
+        provCells(k, :) = {str(r.label), engineTxt, str(r.detail)};
+    end
+    provTable = Table([{'Output', 'Engine', 'Detail'}; provCells]);
+    provTable.Style = {Border('solid', '#c8d2de', '0.5pt'), ...
+                       ColSep('solid', '#c8d2de', '0.5pt'), ...
+                       RowSep('solid', '#c8d2de', '0.5pt'), ...
+                       Width('100%'), FontFamily('Helvetica'), FontSize('8pt')};
+    provTable.TableEntriesStyle = {InnerMargin('4pt', '4pt', '2pt', '2pt'), VAlign('top')};
+    provTable.Children(1).Style = {BackgroundColor('#eef2f7'), Bold(true)};
+    ph = provTable.Children(1);
+    ph.Children(1).Style = [ph.Children(1).Style, {Width('30%')}];
+    ph.Children(2).Style = [ph.Children(2).Style, {Width('18%')}];
+    ph.Children(3).Style = [ph.Children(3).Style, {Width('52%')}];
+    append(d, provTable);
+
+    % A non-primary engine is a caveat on the result, not a footnote about
+    % infrastructure: it means an explicit flag let a secondary implementation
+    % answer where the primary one would have failed the case instead.
+    if anyFallback
+        pf = Paragraph(['One or more outputs above came from a NON-PRIMARY engine ' ...
+                        '(marked FALLBACK). Weigh this result accordingly.']);
+        pf.Style = {FontFamily('Helvetica'), FontSize('9pt'), Bold(true), ...
+                    Color('#8a1f1f'), OuterMargin('0pt', '0pt', '4pt', '4pt')};
+        append(d, pf);
+    end
+end
 
 close(d);
 clear cleanupDoc

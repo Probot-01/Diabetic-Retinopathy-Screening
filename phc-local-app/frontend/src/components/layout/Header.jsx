@@ -61,6 +61,9 @@ export const Header = ({ auth, onLogout }) => {
         <NavLink to="/queue" className={({isActive}) => isActive ? "app-nav__link active" : "app-nav__link"}>
           {t('header.nav.queue')}
         </NavLink>
+        <NavLink to="/devices" className={({isActive}) => isActive ? "app-nav__link active" : "app-nav__link"}>
+          {t('header.nav.devices', 'DEVICES')}
+        </NavLink>
       </nav>
       
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>

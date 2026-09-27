@@ -17,7 +17,8 @@ function outPath = generateReportFigures(inputJsonPath, outPath)
 %   drGradeCnn, confidenceScore, conformalTier, tierReason (optional),
 %   drGradeRuleEngine, branchAgreement,
 %   lesionCounts {red, bright, redTotal, brightTotal},  nvSuspicionScore,
-%   evidenceSummaryText, generatedAt
+%   evidenceSummaryText, generatedAt,
+%   modelVersion, provenanceRows [{label, engine, fallback, detail}]
 %
 % Any field may be null; a null is printed as "not available", never as 0 --
 % the same not-measured-vs-measured-zero rule as the rest of the pipeline.
@@ -80,7 +81,7 @@ if ~isempty(get('tierReason'))
     txt(f1, 0.6, y - 0.92, ['Why: ' str(get('tierReason'))], 9, 'normal', W - 1.2);
 end
 
-footer(f1, W, DISCLAIMER, 1, 2);
+footer(f1, W, DISCLAIMER, 1, 3);
 
 % ═══ Page 2: both branches, lesion evidence, rationale ══════════════════════
 f2 = newPage(W, H);
@@ -130,13 +131,56 @@ y = y - 2.55;
 txt(f2, 0.6, y, 'Evidence summary', 12, 'bold');
 txt(f2, 0.6, y - 0.3, str(get('evidenceSummaryText')), 9, 'normal', W - 1.2);
 
-footer(f2, W, DISCLAIMER, 2, 2);
+footer(f2, W, DISCLAIMER, 2, 3);
+
+% ═══ Page 3 -- how this result was produced ═════════════════════════════════
+% The SAME section generateReport.m renders with the Report Generator. Both
+% renderers write the same report; a fact that appears in one and not the
+% other is exactly the divergence the fallback exists to avoid. It gets its
+% own page here because this renderer places text by hand and page 2 has no
+% room left, not because it is less important.
+f3 = newPage(W, H);
+header(f3, W, H, 'How this result was produced', str(get('caseId')));
+y = H - 1.5;
+txt(f3, 0.6, y, sprintf('Classifier model build: %s', str(get('modelVersion'))), 10, 'bold');
+
+y = y - 0.5;
+rowsProv = get('provenanceRows');
+if isempty(rowsProv)
+    txt(f3, 0.6, y, ['The engine that produced each output was not recorded for this ' ...
+        'case. That is a gap in the record, not a statement that any particular ' ...
+        'engine ran.'], 9, 'normal', W - 1.2);
+else
+    txt(f3, 0.6, y, 'Output', 9, 'bold');
+    txt(f3, 3.4, y, 'Engine', 9, 'bold');
+    anyFallback = false;
+    for k = 1:numel(rowsProv)
+        r = rowsProv(k);
+        yy = y - 0.34 - 0.46 * (k - 1);
+        engineTxt = upper(str(r.engine));
+        if isequal(r.fallback, true)
+            engineTxt = [engineTxt ' (FALLBACK)'];   %#ok<AGROW>
+            anyFallback = true;
+        end
+        txt(f3, 0.6, yy, str(r.label), 9, 'bold');
+        txt(f3, 3.4, yy, engineTxt, 9);
+        txt(f3, 0.8, yy - 0.2, str(r.detail), 8, 'normal', W - 1.4);
+    end
+    if anyFallback
+        yy = y - 0.34 - 0.46 * numel(rowsProv) - 0.25;
+        t = txt(f3, 0.6, yy, ['One or more outputs above came from a NON-PRIMARY ' ...
+            'engine (marked FALLBACK). Weigh this result accordingly.'], 9, 'bold', W - 1.2);
+        t.Color = [0.54 0.12 0.12];
+    end
+end
+footer(f3, W, DISCLAIMER, 3, 3);
 
 % ═══ Write ══════════════════════════════════════════════════════════════════
 if isfile(outPath), delete(outPath); end
 exportgraphics(f1, outPath, 'ContentType', 'vector');
 exportgraphics(f2, outPath, 'ContentType', 'vector', 'Append', true);
-close([f1 f2]);
+exportgraphics(f3, outPath, 'ContentType', 'vector', 'Append', true);
+close([f1 f2 f3]);
 end
 
 % ── Layout helpers ──────────────────────────────────────────────────────────
