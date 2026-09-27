@@ -135,6 +135,61 @@ function relativeTime(iso, now) {
   return `${diffDay}d ago`;
 }
 
+/**
+ * The urgency model's clinical inputs, and how to talk about the ones that
+ * were substituted rather than measured.
+ *
+ * The questionnaire asks for glycemic control as poor/moderate/good, and the
+ * model needs an HbA1c, so 'moderate' becomes 7.5. That is reasonable of the
+ * model and unreasonable to hide: a score of 79 resting on two such midpoints
+ * is a different claim from the same 79 built from three real values, and on
+ * a queue row the two used to look identical.
+ *
+ * `urgencyAssumedInputs` is [] when everything was measured and null when it
+ * is not known (no score, or a row from before it was recorded). Those are
+ * different, so neither is treated as the other.
+ */
+const URGENCY_INPUT_LABELS = {
+  patientAge: 'age',
+  yearsDiabetic: 'years diabetic',
+  hba1c: 'HbA1c',
+};
+
+const assumedCount = (item) =>
+  (Array.isArray(item.urgencyAssumedInputs) ? item.urgencyAssumedInputs.length : 0);
+
+const assumedPhrase = (names) => {
+  const labels = names.map((n) => URGENCY_INPUT_LABELS[n] || n);
+  if (labels.length === 1) return labels[0];
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+};
+
+/** The urgency cell's hover text: the limitation, plus what was substituted. */
+function urgencyTitle(item) {
+  if (item.urgencyScore == null) {
+    return 'Not computed: the clinical inputs (age, years diabetic, HbA1c) were not '
+      + 'all available. This is not a low-urgency result.';
+  }
+  const base = item.urgencyLimitation || '';
+  const n = assumedCount(item);
+  if (n > 0) {
+    return `${base}
+
+Partly estimated: ${assumedPhrase(item.urgencyAssumedInputs)} `
+      + `${n === 1 ? 'was' : 'were'} not measured. The questionnaire records a range, `
+      + 'and the midpoint of that range was used in place of a value.';
+  }
+  if (Array.isArray(item.urgencyAssumedInputs)) {
+    return `${base}
+
+All three clinical inputs (age, years diabetic, HbA1c) were measured.`;
+  }
+  // null: not recorded. Saying "all measured" here would invent a reassurance.
+  return `${base}
+
+Whether these inputs were measured or estimated was not recorded for this case.`;
+}
+
 export const ReviewQueuePage = () => {
   const { t } = useTranslation();
   const [queue, setQueue] = useState([]);
@@ -613,12 +668,24 @@ export const ReviewQueuePage = () => {
                     for low urgency. */}
                 <td
                   className="t-mono"
-                  title={item.urgencyLimitation
-                    || 'Not computed: the clinical inputs (age, years diabetic, HbA1c) were not all available. This is not a low-urgency result.'}
+                  title={urgencyTitle(item)}
                   style={{ opacity: item.urgencyScore == null ? 0.35 : 0.85 }}
+                  data-testid="urgency-cell"
                 >
                   {item.urgencyScore == null ? '--' : (
                     <>
+                      {/* A leading ~ when any of the model's clinical inputs
+                          was a bucket midpoint rather than a measurement. In
+                          the open, not only on hover, for the same reason the
+                          footnote is: the number reads as evidence unless
+                          something on the row says otherwise. */}
+                      {assumedCount(item) > 0 && (
+                        <span
+                          style={{ fontWeight: 700, marginRight: 1 }}
+                          data-testid="urgency-assumed-marker"
+                          aria-label="partly estimated"
+                        >~</span>
+                      )}
                       <span style={{ fontWeight: 700 }}>{item.urgencyScore}</span>
                       {item.urgencyTopFactor && (
                         <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: 4 }}>
@@ -651,6 +718,12 @@ export const ReviewQueuePage = () => {
           + 'the review tier or the referral decision. "--" means it was not '
           + 'computed because age, years diabetic or HbA1c was missing; that is '
           + 'not a low-urgency result.')}
+        {' '}
+        {t('central.queue.urgencyAssumedFootnote',
+          '"~" means at least one of the model’s clinical inputs was not measured '
+          + 'but substituted — the questionnaire records glycemic control as '
+          + 'poor/moderate/good and the model needs an HbA1c, so the bucket’s '
+          + 'midpoint stands in. Hover the score to see which inputs those were.')}
       </div>
 
       {sortedQueue.length === 0 && (

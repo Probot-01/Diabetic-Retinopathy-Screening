@@ -28,6 +28,7 @@ const cfg         = require('../services/authConfig');
 const requireAuth = require('../middleware/requireAuth');
 const requireRole = require('../middleware/requireRole');
 const { logAccess } = require('../services/accessLog');
+const urgencyInputs = require('../services/urgencyInputs');
 
 const router = express.Router();
 
@@ -51,6 +52,11 @@ router.get('/queue', requireAuth, requireRole('ophthalmologist'), async (req, re
           g.conformal_tier,
           g.urgency_score,
           g.urgency_factor,
+          -- Only the provenance sub-object is wanted here, not the whole
+          -- urgency_inputs blob: it repeats a model card on every row and the
+          -- queue shows none of it. Extracted in SQL so the payload does not
+          -- carry what it will not use.
+          g.urgency_inputs -> 'provenance' AS urgency_input_provenance,
           -- uncertainty_score is NULL until Phase 6 ships, so (1 - confidence)
           -- stands in for it. Same ordering, different scale -- it is a
           -- placeholder for RANKING only and is never reported as uncertainty.
@@ -127,6 +133,14 @@ router.get('/queue', requireAuth, requireRole('ophthalmologist'), async (req, re
       urgencyScore:      Number.isFinite(r.urgency_score) ? r.urgency_score : null,
       urgencyTopFactor:  r.urgency_factor ?? null,
       urgencyBasis:      r.urgency_score == null ? null : 'synthetic-model',
+      // WHICH of the model's clinical inputs were substituted rather than
+      // measured. A score of 79 resting on two bucket midpoints is a
+      // different claim from the same 79 computed from three real values,
+      // and on a queue row the two looked identical. [] = all measured,
+      // null = not known (no score, or a row from before this was recorded)
+      // -- deliberately distinct from [], which is a positive statement.
+      urgencyAssumedInputs: urgencyInputs.assumedInputs(
+        r.urgency_input_provenance ? { provenance: r.urgency_input_provenance } : null),
       urgencyLimitation: r.urgency_score == null ? null
         : 'Trained on synthetic data, never validated against patient outcomes. '
           + 'Queue ordering hint only -- not a clinical assessment.',
