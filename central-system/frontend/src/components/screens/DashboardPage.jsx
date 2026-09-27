@@ -74,8 +74,21 @@ const useCountUp = (target, duration = 1200) => {
       }
     };
 
+    const finalText = isFloat ? numericTarget.toFixed(decimals) : Math.round(numericTarget).toLocaleString();
+    // The count-up is decoration; the number is the data. Browsers pause
+    // requestAnimationFrame in a background or throttled tab, which left a real
+    // figure stuck on its starting "0" -- "0s" average review time reads as
+    // "reviews are instant". So: no animation while hidden, and a timer that
+    // lands the true value whatever the animation did.
+    if (typeof document !== 'undefined' && document.hidden) {
+      setDisplay(finalText);
+      return undefined;
+    }
+    const settle = setTimeout(() => setDisplay(finalText), duration + 250);
+
     rafRef.current = requestAnimationFrame(animate);
     return () => {
+      clearTimeout(settle);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [target, duration]);

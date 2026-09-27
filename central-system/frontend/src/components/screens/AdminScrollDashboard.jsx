@@ -42,6 +42,14 @@ const useCountUp = (target, shouldAnimate, duration = 1400) => {
     const isFloat = cleanStr.includes('.');
     const decimals = isFloat ? (cleanStr.split('.')[1] || '').length : 0;
     const startTime = performance.now();
+    const finalText = isFloat ? numericTarget.toFixed(decimals) : Math.round(numericTarget).toLocaleString();
+
+    // The count-up is decoration; the number is the data. A paused
+    // requestAnimationFrame (background/throttled tab) must not leave a real
+    // figure on its starting "0": skip the animation while hidden, and always
+    // land the true value with a timer.
+    if (typeof document !== 'undefined' && document.hidden) { el.textContent = finalText; return undefined; }
+    const settle = setTimeout(() => { el.textContent = finalText; }, duration + 250);
 
     const animate = (now) => {
       const progress = Math.min((now - startTime) / duration, 1);
@@ -52,7 +60,7 @@ const useCountUp = (target, shouldAnimate, duration = 1400) => {
     };
 
     rafRef.current = requestAnimationFrame(animate);
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    return () => { clearTimeout(settle); if (rafRef.current) cancelAnimationFrame(rafRef.current); };
   }, [target, shouldAnimate, duration]);
 
   return ref;
