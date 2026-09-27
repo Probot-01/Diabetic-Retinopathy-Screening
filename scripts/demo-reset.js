@@ -204,7 +204,18 @@ async function createDemoSet(cfg2) {
     const fd = new FormData();
     fd.append('patientId', p.patientId); fd.append('cameraDeviceId', 'unknown');
     fd.append('image', new Blob([fs.readFileSync(file)], { type: 'image/jpeg' }), path.basename(file));
-    const cap = await phcCall(base, 'POST', '/captures', null, fd);
+    // The gate is a fresh `matlab -batch` per capture; on Windows it now and then dies at
+    // process start (exit 3221225794, DLL init) while other MATLABs are running. The
+    // capture is saved and its 503 carries the id, so re-run the check instead of failing.
+    let cap;
+    try { cap = await phcCall(base, 'POST', '/captures', null, fd); } catch (err) {
+      const m = /"captureId":"([^"]+)"/.exec(err.message);
+      if (!/quality_gate_failed/.test(err.message) || !m) throw err;
+      for (let attempt = 1; attempt <= 3 && !cap; attempt++) {
+        say(`     quality gate did not start (attempt ${attempt}); re-running the check for ${m[1]}`);
+        try { cap = await phcCall(base, 'POST', `/captures/${m[1]}/quality-check`, {}); } catch (e2) { if (attempt === 3) throw e2; }
+      }
+    }
     if (!['pass', 'borderline'].includes(cap.qualityStatus)) {
       throw new Error(`IDRiD_${c.idrid}: the quality gate said '${cap.qualityStatus}${cap.qualityReason ? '/' + cap.qualityReason : ''}', so it would never sync. Pick another image in demo-set.json.`);
     }
