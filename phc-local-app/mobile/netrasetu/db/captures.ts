@@ -1,6 +1,7 @@
 import { File } from 'expo-file-system';
 import { getDb, nowIso } from './database';
 import { generateLocalId } from '../lib/ids';
+import { QUALITY_GATE_ENGINE } from '../lib/quality/engine';
 import {
   Capture, CaptureMetadataPayload, CaptureSource, CentralStatus, Eye, LifecycleStatus,
   QualityResult, QueueEntry, QuestionnairePayload, SyncRow, SyncState,
@@ -17,6 +18,7 @@ interface CaptureRow {
   quality_status: Capture['qualityStatus'];
   quality_reason: Capture['qualityReason'];
   quality_scores_json: string | null;
+  quality_engine: string | null;
   retake_count: number;
   best_effort: number;
   captured_at: string;
@@ -50,6 +52,7 @@ function captureFromRow(r: CaptureRow): Capture {
     qualityStatus: r.quality_status,
     qualityReason: r.quality_reason,
     qualityScores: r.quality_scores_json ? JSON.parse(r.quality_scores_json) : null,
+    qualityEngine: r.quality_engine ? JSON.parse(r.quality_engine) : null,
     retakeCount: r.retake_count,
     bestEffort: !!r.best_effort,
     capturedAt: r.captured_at,
@@ -98,6 +101,8 @@ export function newCaptureId(): string {
 /**
  * Records a quality-checked capture. Every attempt is recorded, including
  * the ones that fail the gate: that is what makes the retake count real.
+ * The gate that produced `quality` ran on this device, so the engine recorded
+ * is always the on-device one ("js-device").
  */
 export async function recordCapture(c: {
   captureId: string;
@@ -113,10 +118,10 @@ export async function recordCapture(c: {
   const retakeCount = await countRetakesToday(c.patientId);
   await db.runAsync(
     `INSERT INTO captures (capture_id, patient_id, eye, camera_device_id, source, image_path, image_bytes,
-                           quality_status, quality_reason, quality_scores_json, retake_count, best_effort, captured_at)
-     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+                           quality_status, quality_reason, quality_scores_json, quality_engine, retake_count, best_effort, captured_at)
+     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
     [c.captureId, c.patientId, c.cameraDeviceId, c.source, c.imagePath, c.imageBytes,
-     c.quality.status, c.quality.reason, JSON.stringify(c.quality), retakeCount, c.capturedAt]);
+     c.quality.status, c.quality.reason, JSON.stringify(c.quality), JSON.stringify(QUALITY_GATE_ENGINE), retakeCount, c.capturedAt]);
   return (await getCapture(c.captureId))!;
 }
 
