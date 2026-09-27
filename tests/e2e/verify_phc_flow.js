@@ -237,6 +237,8 @@ async function setup() {
 
   centralEnv = {
     DATABASE_URL: DB_URL, PORT: String(CENTRAL_PORT),
+    // Case media goes to the run's scratch directory, never backend/media.
+    MEDIA_ROOT: path.join(RUN, 'central-media'),
     // Grading runs on the Python classifier so no second persistent MATLAB session is
     // needed; the MATLAB rule-engine / report steps still use matlab -batch.
     INFERENCE_BACKEND: 'python', MATLAB_SUPERVISOR_ENABLED: 'false', SEG_WORKER_SUPERVISOR_ENABLED: 'false',
