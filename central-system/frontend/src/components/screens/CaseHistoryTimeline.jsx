@@ -228,7 +228,7 @@ export const CaseHistoryTimeline = ({ priorAssessments }) => {
                   </div>
                   <div>
                     <div className="t-mono u-mb-1" style={{ opacity: 0.5, fontSize: 'var(--fs-tiny)' }}>
-                      {t('central.timeline.visitId', 'VISIT ID')}: {visit.caseId.slice(0, 8)} • {date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      {t('central.timeline.visitLabel', 'VISIT')} • {date.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' })}
                     </div>
                     <div className="t-h3 u-mb-2" style={{ fontWeight: 800 }}>{grade} / {drGradeLabels[grade] || 'UNKNOWN'}</div>
                     {visit.status && (

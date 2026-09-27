@@ -175,7 +175,7 @@ export const ResourceRecommendationsPanel = () => {
               BOTTLENECK: {bottleneck.toUpperCase()}
             </span>
             <span className="t-mono" style={{ fontSize: '11px', color: 'var(--c-text-muted)' }}>
-              Last computed: {new Date(recommendations.generatedAt).toLocaleTimeString('en-IN')}
+              Last computed: {new Date(recommendations.generatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}
             </span>
           </div>
           <span className="t-mono" style={{ fontSize: '11px', fontWeight: 700 }}>
@@ -272,7 +272,7 @@ export const ResourceRecommendationsPanel = () => {
       </div>
 
       {valError && (valError.code === 'validation_not_run'
-        ? <p className="t-mono u-mb-4">The Simulink co-validation has not run on this server yet (weekly, or on demand).</p>
+        ? <p className="t-mono u-mb-4">Simulation results not yet generated. The Simulink co-validation runs weekly, or on demand with the button below.</p>
         : <LoadError error={valError} what="the Simulink validation" />)}
 
       {/* Simulink Model Validation Card (PS-Requirement 5 Co-Validation) */}
