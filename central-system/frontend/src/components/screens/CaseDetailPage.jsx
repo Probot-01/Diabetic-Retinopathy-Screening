@@ -354,6 +354,16 @@ export const CaseDetailPage = () => {
                     : 'N/A'}
                 </p>
               </div>
+              {/* Which engine ran the PHC's quality gate (engineProvenance.qualityGate).
+                  null is shown as "not recorded", never guessed. */}
+              <div style={{ padding: 'var(--sp-3)', borderTop: 'var(--border)', gridColumn: '1 / -1' }}>
+                <span className="t-label" style={{ opacity: 0.5 }}>QUALITY GATE ENGINE</span>
+                <p className="t-mono" style={{ fontWeight: 700 }} title={c.engineProvenance?.qualityGate?.detail || undefined}>
+                  {c.engineProvenance?.qualityGate
+                    ? `${c.engineProvenance.qualityGate.engine.toUpperCase()}${c.engineProvenance.qualityGate.fallback ? ' (FALLBACK)' : ''}`
+                    : 'NOT RECORDED'}
+                </p>
+              </div>
             </div>
           </div>
         </div>
