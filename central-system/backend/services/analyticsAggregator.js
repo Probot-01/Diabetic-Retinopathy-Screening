@@ -230,6 +230,55 @@ async function getPhcSyncStatus(phcId) {
   };
 }
 
+const PHC_SILENT_HOURS = (() => {
+  const v = Number(process.env.PHC_SILENT_HOURS);
+  return Number.isFinite(v) && v > 0 ? v : 24;
+})();
+
+/**
+ * getPhcs()
+ *
+ * -> [ { phcId, phcCode, name, district, lastSyncAt, casesLast24h,
+ *        pendingOrFailedCount, status } ], every row in phc_sites.
+ *
+ * lastSyncAt is the latest case CENTRAL RECEIVED from the site (not
+ * phc_sites.last_sync_at, which has its own narrower meaning). null = it has
+ * never sent a case, which is "silent", not "recent".
+ *
+ * pendingOrFailedCount = what the PHC last said it still has queued
+ * (phc_sites.pending_count, accurate only as of its last contact) + cases from
+ * that site whose grading failed here (status 'error'). Both are work that has
+ * not reached a result.
+ *
+ * status: 'silent' when nothing arrived within PHC_SILENT_HOURS (default 24),
+ * else 'active'.
+ *
+ * The API key and its hash are never selected.
+ */
+async function getPhcs() {
+  const { rows } = await pool.query(`
+    SELECT s.phc_id, s.phc_code, s.name, s.district, s.pending_count,
+           (SELECT MAX(c.received_at) FROM cases c WHERE c.phc_id = s.phc_id) AS last_received,
+           (SELECT COUNT(*)::int FROM cases c
+             WHERE c.phc_id = s.phc_id AND c.received_at > now() - interval '24 hours') AS cases_24h,
+           (SELECT COUNT(*)::int FROM cases c
+             WHERE c.phc_id = s.phc_id AND c.status = 'error') AS failed
+    FROM phc_sites s
+    ORDER BY s.name, s.phc_id
+  `);
+  const cutoff = Date.now() - PHC_SILENT_HOURS * 3_600_000;
+  return rows.map((r) => ({
+    phcId:                r.phc_id,
+    phcCode:              r.phc_code ?? null,
+    name:                 r.name,
+    district:             r.district ?? null,
+    lastSyncAt:           r.last_received ? r.last_received.toISOString() : null,
+    casesLast24h:         r.cases_24h,
+    pendingOrFailedCount: (r.pending_count ?? 0) + r.failed,
+    status:               r.last_received && r.last_received.getTime() >= cutoff ? 'active' : 'silent',
+  }));
+}
+
 function toReferral(r) {
   return {
     referralId:       r.referral_id,
@@ -243,5 +292,5 @@ function toReferral(r) {
 }
 
 module.exports = {
-  getDashboard, getReferrals, updateReferral, getPhcSyncStatus, REPORT_TZ,
+  getDashboard, getReferrals, updateReferral, getPhcSyncStatus, getPhcs, REPORT_TZ,
 };
