@@ -117,8 +117,13 @@ function probePython() {
           py.status = 'unavailable';
           py.version = null;
           py.missing = [];
-          py.error = `${err.code === 'ENOENT' ? `no interpreter at '${PYTHON_EXE}'` : err.message}`
-            + (stderr ? ` -- ${String(stderr).trim().slice(0, 200)}` : '');
+          // Say what happened, not err.message (which is the whole command line,
+          // including the probe script).
+          py.error = (err.code === 'ENOENT' ? `no interpreter at '${PYTHON_EXE}'`
+            : err.killed ? `the probe did not finish within ${Math.round(PY_PROBE_TIMEOUT_MS / 1000)} s `
+              + '(a cold start can take that long; it is retried)'
+            : `the probe exited with code ${err.code}`)
+            + (stderr ? ` -- ${String(stderr).trim().slice(-200)}` : '');
         } else {
           const [version, bad = ''] = String(stdout).trim().split(/\r?\n/);
           py.version = version || null;
