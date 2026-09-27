@@ -19,6 +19,14 @@
 Kept because this file is the tie-breaker: when it changes, the code and both
 plans have to be re-checked against it, and a silent edit makes that impossible.
 
+**2026-09-27 — Reviewer and admin flows, verified against real cases.**
+- **Lesion evidence is two families, red and bright.** `lesionCounts.microaneurysms` and `hemorrhages` are the breakdown of the red family, and are real numbers under M5 v2 (`null` under v1). `hardExudates` is the bright family. **`softExudates` is deprecated:** it stays in the response for wire compatibility, is always `null`, and no UI renders it, because nothing detects cotton-wool spots. It will be removed once the mobile app stops reading it.
+- **`lesionCounts.detail.redTotal` is now the sum of `redPerQuadrant`.** It used to be the older whole-mask count, which under M5 v2 differed from the quadrant counts the rule engine and the evidence text use (for example 15 against 18).
+- **`GET /admin/dashboard` gains** `casesThisWeek` (last 7 days), `totalCasesProcessed` (graded), `overrideRate` (0–1, or `null` with no reviews), `avgConfidenceScore` (0–1, or `null`), `drGradeDistribution` (`[{ grade, label, count, percentage }]` for the classifier's grade, or `null` with nothing graded) and `weeklyTrend` (`[{ week, cases, referrals }]`, last six weeks). Additive. Not provided, because central cannot know them: images rejected by the PHC quality gate, and model accuracy.
+- **`GET /admin/referrals` items and the `PATCH /referrals/:id` response gain** `phcName` and `drGrade` (the reviewer's corrected grade when there is one, else the classifier's). Additive.
+- **`manual_follow_up` is also set when no SMS provider is configured** (`smsStatus: "not_configured"`). The patient was not told, so someone has to phone them. It was left in `referred` before. `dry_run` is unchanged.
+- **`GET /cases/:caseId/report` 502** now carries a short message. The MATLAB error is in the server log only. The report needs the MATLAB Report Generator toolbox on the server.
+
 **2026-09-26 (later) — Quality-gate engine value `js-device`.** `qualityGateEngine` and `engineProvenance.qualityGate` may now also be `"js-device"`. It means the mobile app's on-device TypeScript port of `qualityGateMain.m`, which is that client's primary gate, so `fallback` is `false`. It is valid only for the quality gate. Classifier, segmentation and rule-engine entries stay `"matlab" | "python" | "js-fallback"`. The backend accepts it now; the mobile app starts sending it separately.
 
 **2026-09-26 — Engine provenance, component health, no silent segmentation fallback.**
