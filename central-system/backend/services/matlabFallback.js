@@ -343,8 +343,12 @@ function evidenceSummaryText(inputs, ruleOpts = {}) {
 }
 
 // ── classifyCameraFamily.m (no-op stub — see file header) ─────────────────
+// cameraExpectedFamily is '' because this stub never runs the cross-check.
+// That is what makes the resulting cases.camera_mismatch NULL ("nobody
+// looked") rather than false ("the camera was verified against its image"),
+// which is the honest answer for a path that does no camera classification.
 function classifyCameraFamily() {
-  return { cameraFamily: 'unknown', cameraMismatch: false };
+  return { cameraFamily: 'unknown', cameraMismatch: false, cameraExpectedFamily: '' };
 }
 
 // ── readFundusImage.m metadata (non-DICOM path only) ───────────────────────
@@ -427,6 +431,7 @@ function runMatlabFallback({ imagePath, segResult, branchAGrade, ruleOpts = {} }
     imageLaterality: meta.imageLaterality,
     cameraFamily: cam.cameraFamily,
     cameraMismatch: cam.cameraMismatch,
+    cameraExpectedFamily: cam.cameraExpectedFamily,
     ruleEngineGrade: ruleGrade,
     branchAgreement,
     // The MEASURED score (null when it could not run), not the 0 the rule

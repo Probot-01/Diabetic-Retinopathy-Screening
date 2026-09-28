@@ -148,12 +148,31 @@ end
 camMap        = reqMatrix(req, 'camMap');
 lesion384Path = reqStr(req, 'lesion384Path');
 roi384Path    = reqStr(req, 'roi384Path');
-lesionAttention = [];
+%
+% The score travels WITH its chance level. lesionAttentionConsistency.m's own
+% header is blunt about why: "a raw overlap fraction is not interpretable" --
+% if lesions cover 70% of the retina, a heatmap of pure noise also scores 0.70.
+% The number means something only against `chanceLevel` (the lesion area
+% fraction), and `enrichment` is that ratio. Returning the score alone would
+% hand the UI a figure it cannot colour honestly, which is the specific
+% mistake that header warns against.
+lesionAttention   = [];
+lesionChanceLevel = [];
+lesionEnrichment  = [];
+lesionFlagged     = [];
 if ~isempty(camMap) && isfile(lesion384Path) && isfile(roi384Path)
     lesionMask = imread(lesion384Path) > 127;
     roiMask    = imread(roi384Path) > 127;
     camFull    = imresize(camMap, size(lesionMask), 'bilinear');
-    lesionAttention = lesionAttentionConsistency(camFull, lesionMask, roiMask);
+    [lesionAttention, lesionDetail] = lesionAttentionConsistency(camFull, lesionMask, roiMask);
+    % NaN is this function's "undefined", for an eye with no segmented lesions
+    % and for a heatmap with no energy. Empty here so the Node side stores NULL
+    % rather than a number, while `flagged` -- which is defined in both of those
+    % cases -- still travels.
+    if ~isfinite(lesionAttention), lesionAttention = []; end
+    lesionChanceLevel = nanToEmpty(lesionDetail.chanceLevel);
+    lesionEnrichment  = nanToEmpty(lesionDetail.enrichment);
+    lesionFlagged     = logical(lesionDetail.flagged);
 end
 
 % ── Task 7.3: the evidence report ───────────────────────────────────────────
@@ -175,12 +194,30 @@ out.dicomDeviceModel = imgMeta.deviceModel;
 out.imageLaterality  = imgMeta.laterality;
 out.cameraFamily     = cameraFamily;
 out.cameraMismatch   = ~isempty(cameraDetail) && cameraDetail.mismatch;
+% WHETHER THE CROSS-CHECK COULD RUN AT ALL. classifyCameraFamily compares the
+% detected family against the family the REPORTED device implies, and it can
+% only do that when that device is in calibrationProfiles.json's
+% deviceAssociations. When it is not -- an unrecognised dropdown value, or no
+% device reported -- expectedFamily is '' and mismatch comes back false.
+%
+% That false is "not checked", NOT "the two agree", and the two are different
+% claims: one says a camera was verified against its image, the other says
+% nobody could look. Empty here makes cases.camera_mismatch NULL on the Node
+% side instead of a fabricated agreement.
+if ~isempty(cameraDetail)
+    out.cameraExpectedFamily = cameraDetail.expectedFamily;
+else
+    out.cameraExpectedFamily = '';
+end
 out.ruleEngineGrade  = ruleGrade;
 out.branchAgreement  = branchAgree;
 out.nvSuspicionScore = nvScore;
 out.ruleIsLowerBound = ruleIsLowerBound;
 out.ruleMaxGrade     = ruleMaxGrade;
 out.lesionAttentionConsistency = lesionAttention;
+out.lesionAttentionChanceLevel = lesionChanceLevel;
+out.lesionAttentionEnrichment  = lesionEnrichment;
+out.lesionAttentionFlagged     = lesionFlagged;
 
 % ── Triage urgency (grading/calculateUrgencyScore.m) ───────────────────────
 % A QUEUE ORDERING HINT. The forest behind it is trained on SYNTHETIC data --
@@ -377,5 +414,14 @@ function v = numOrEmpty(s, name)
 v = [];
 if ~isfield(s, name), return; end
 x = s.(name);
+if isnumeric(x) && isscalar(x) && isfinite(x), v = double(x); end
+end
+
+function v = nanToEmpty(x)
+% A NaN from lesionAttentionConsistency means UNDEFINED, not zero: an eye with
+% no segmented lesions gives attention nothing to agree with. Empty here so the
+% Node side writes NULL, which is the same distinction the rest of this
+% pipeline keeps between "not measured" and "measured as zero".
+v = [];
 if isnumeric(x) && isscalar(x) && isfinite(x), v = double(x); end
 end

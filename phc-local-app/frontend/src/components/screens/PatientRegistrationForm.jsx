@@ -73,6 +73,7 @@ export const PatientRegistrationForm = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+
   const [submitError, setSubmitError] = useState(null);
 
   /* ── patient-info (mock mode: prefilled fictional patient, see demo()) ── */
@@ -97,6 +98,37 @@ export const PatientRegistrationForm = () => {
   const [occupation, setOccupation] = useState(demo('homemaker'));
   const [contactNumber, setContactNumber] = useState(demo('+919876543210'));
   const [altPhone, setAltPhone] = useState(demo('+919811223344'));
+
+  /* ── duplicate check (design doc SS10.3, backend plan SSB.1) ──────────────
+     The same person registered twice becomes two patient records with two
+     separate screening histories and nothing pointing between them. The
+     search endpoint has existed since B.1 and nothing called it. */
+  const [dupes, setDupes] = useState([]);
+  const [dupeChecked, setDupeChecked] = useState(false);
+
+  // Debounced, and only once there is enough to search on -- the server
+  // refuses a search on age alone because it would return most of the
+  // register. Failures are swallowed on purpose: this is an ADVISORY check,
+  // and a search that errors must never block a registration.
+  useEffect(() => {
+    const fullName = [firstName, middleName, lastName].filter(Boolean).join(' ').trim();
+    const hasName = fullName.length >= 3;
+    const hasPhone = String(contactNumber || '').replace(/\D/g, '').length >= 4;
+    if (!hasName && !hasPhone) { setDupes([]); setDupeChecked(false); return undefined; }
+
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const found = await localApi.searchPatients({
+          name: fullName, phone: contactNumber, age,
+        });
+        if (!cancelled) { setDupes(found || []); setDupeChecked(true); }
+      } catch {
+        if (!cancelled) { setDupes([]); setDupeChecked(false); }
+      }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [firstName, middleName, lastName, contactNumber, age]);
 
   /* ── questionnaire ────────────────────────────────────── */
   // Live mode starts with NOTHING answered (null / ''): "no skip" means every
@@ -527,6 +559,58 @@ export const PatientRegistrationForm = () => {
             Still to answer before capture: {questionnaireMissing.join(' · ')}
           </div>
         )}
+        {/* ── POSSIBLE DUPLICATE ────────────────────────────────────────
+            Advisory, never blocking. The worker is in front of the patient
+            and knows things this check cannot -- two sisters at one address
+            share a surname and a phone. So it shows what matched and lets
+            them decide, rather than refusing the registration.
+
+            matchedOn is shown because WHICH field matched is the whole
+            signal: a shared name is weak evidence, a shared phone number is
+            strong, and collapsing them into one score would hide that. */}
+        {dupeChecked && dupes.length > 0 && (
+          <div
+            className="meta-card"
+            data-testid="duplicate-warning"
+            style={{ borderLeft: '3px solid var(--c-amber, #d29922)' }}
+          >
+            <div className="meta-card__header">
+              <h3 className="meta-card__title">
+                POSSIBLE DUPLICATE — {dupes.length} EXISTING PATIENT
+                {dupes.length > 1 ? 'S' : ''}
+              </h3>
+            </div>
+            <div className="meta-card__body">
+              <p style={{ fontSize: '12px', opacity: 0.75, marginTop: 0 }}>
+                Someone matching these details is already registered. Registering
+                again creates a second record with a separate screening history.
+                Check before continuing — you can still register if this is a
+                different person.
+              </p>
+              {dupes.slice(0, 5).map((d) => (
+                <div
+                  key={d.patientId}
+                  className="u-flex u-items-center u-gap-2"
+                  style={{ padding: '6px 0', borderTop: 'var(--border)' }}
+                >
+                  <span style={{ fontWeight: 700 }}>{d.name}</span>
+                  <span className="t-mono" style={{ fontSize: '11px', opacity: 0.7 }}>
+                    {d.patientReference || d.patientId}
+                  </span>
+                  {d.age != null && (
+                    <span style={{ fontSize: '11px', opacity: 0.7 }}>age {d.age}</span>
+                  )}
+                  {Array.isArray(d.matchedOn) && d.matchedOn.length > 0 && (
+                    <span className="badge badge--neutral" style={{ fontSize: '10px' }}>
+                      matched on {d.matchedOn.join(' + ')}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {submitError && <LoadError error={submitError} title="PATIENT NOT REGISTERED" compact />}
         <div className="reg-footer">
           <button type="button" className="btn btn--outline" onClick={handleClearAll}>

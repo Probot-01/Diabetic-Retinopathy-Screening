@@ -892,6 +892,12 @@ async function gradeCase(caseId, plainImagePath) {
   // override chain below) — an established camera/site's occasional mismatch
   // stays a log line, same as before; the previous behaviour ("never changes
   // the grading") now only holds once this camera/site has a track record.
+  // The stored, three-state form of the same check (migration 0021). The
+  // console.warn below and the probation override are both lossy: the override
+  // only writes a tier_reason while the tier would otherwise be A AND the
+  // camera/site is still on probation, so on an established camera, or on a
+  // case already in Tier B/C, the mismatch used to reach nobody.
+  const cameraCheck = readCameraCheck(mlResult);
   const cameraProbationOverride = mlResult.cameraMismatch === true
     && !cameraSiteProbationCleared;
   if (mlResult.cameraMismatch) {
@@ -1084,14 +1090,31 @@ async function gradeCase(caseId, plainImagePath) {
   await pool.query(`
     INSERT INTO explainability_outputs
       (case_id, gradcam_path, evidence_summary_text,
-       lesion_attention_consistency_score)
-    VALUES ($1, $2, $3, $4)
+       lesion_attention_consistency_score,
+       lesion_attention_chance_level, lesion_attention_enrichment,
+       lesion_attention_flagged)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (case_id) DO UPDATE SET
       gradcam_path                       = EXCLUDED.gradcam_path,
       evidence_summary_text              = EXCLUDED.evidence_summary_text,
-      lesion_attention_consistency_score = EXCLUDED.lesion_attention_consistency_score
+      lesion_attention_consistency_score = EXCLUDED.lesion_attention_consistency_score,
+      lesion_attention_chance_level      = EXCLUDED.lesion_attention_chance_level,
+      lesion_attention_enrichment        = EXCLUDED.lesion_attention_enrichment,
+      lesion_attention_flagged           = EXCLUDED.lesion_attention_flagged
   `, [caseId, branchA.gradcamPath ?? null, mlResult.evidenceSummaryText ?? null,
-      fromMatlab(mlResult.lesionAttentionConsistency)]);
+      // The score NEVER travels alone (migration 0022). A bare overlap
+      // fraction is not interpretable: lesions covering 70% of the retina make
+      // a noise heatmap score 0.70 too. chanceLevel is what a random heatmap
+      // would score on THIS eye, and enrichment is the ratio that means
+      // something.
+      fromMatlab(mlResult.lesionAttentionConsistency),
+      fromMatlab(mlResult.lesionAttentionChanceLevel),
+      fromMatlab(mlResult.lesionAttentionEnrichment),
+      // Defined even when the score is not: a heatmap with no energy is
+      // undefined-but-flagged, because Grad-CAM producing nothing is itself a
+      // reason to review.
+      typeof mlResult.lesionAttentionFlagged === 'boolean'
+        ? mlResult.lesionAttentionFlagged : null]);
 
   // ── Step 4b: INSERT INTO segmentation_outputs ──────────────────────────────
   // This table has existed since the initial schema with exactly the columns
@@ -1165,12 +1188,12 @@ async function gradeCase(caseId, plainImagePath) {
         foveaUnreliable]);
   }
 
-  // lesion_attention_consistency_score stays NULL on purpose (Task 7.1).
-  // lesionAttentionConsistency is built and unit-tested, but it needs a lesion
-  // MASK, and Tasks 4.2/4.3 produce none. Passing it an empty mask would return
-  // NaN by design; writing a number here from anything else would be inventing
-  // one. It activates the day the segmenter lands, with no change to this file
-  // beyond adding the call.
+  // (lesion_attention_consistency_score is written in Step 4 above, from
+  // mlResult.lesionAttentionConsistency. This used to say it "stays NULL on
+  // purpose" because Tasks 4.2/4.3 produced no lesion mask -- that stopped
+  // being true when the segmenter landed, and the comment outlived it. The
+  // score is NULL only when runCasePipeline.m could not compute one, which
+  // needs the Grad-CAM map as well as the masks.)
 
   // ── Step 5: mark case as graded ────────────────────────────────────────────
   await pool.query(
@@ -1179,12 +1202,24 @@ async function gradeCase(caseId, plainImagePath) {
     // -- see migration 0016. Both engines have always returned these; until
     // now nothing stored them, while readFundusImage.m's header claimed the
     // device "is recorded as evidence".
+    //
+    // THE FAILURE COLUMNS ARE CLEARED. A case can reach here after having
+    // failed before -- the queue retries, the watchdog recovers, and a case
+    // can be re-graded by hand. Leaving failure_code / failure_reason /
+    // failed_at behind would leave a GRADED case carrying the reason it once
+    // gave up, and api-contracts.md says failureCode is "null on every case
+    // that has not failed". getCaseDetail serves the column straight, with no
+    // status check, so the stale value would be reported as this case's own.
+    // (/admin/system-health filters on status = 'error' and was never wrong.)
     `UPDATE cases SET status = 'graded', camera_family_detected = $2,
-       eye_laterality_detected = $3, source_format = $4, dicom_device_model = $5
+       eye_laterality_detected = $3, source_format = $4, dicom_device_model = $5,
+       camera_mismatch = $6, camera_expected_family = $7,
+       failure_code = NULL, failure_reason = NULL, failed_at = NULL
      WHERE case_id = $1`,
     [caseId, fromMatlab(mlResult.cameraFamily), detectedLaterality,
      blankToNull(fromMatlab(mlResult.sourceFormat)),
-     blankToNull(fromMatlab(mlResult.dicomDeviceModel))]);
+     blankToNull(fromMatlab(mlResult.dicomDeviceModel)),
+     cameraCheck.mismatch, cameraCheck.expectedFamily]);
 
   console.log(`[gradingOrchestrator] case ${caseId}: grade=${grade}, `
     + `confidence=${confidenceScore.toFixed(4)}, tier=${tier}, `
@@ -1276,6 +1311,33 @@ function blankToNull(v) {
   if (typeof v !== 'string') return v ?? null;
   const t = v.trim();
   return t === '' ? null : t;
+}
+
+/**
+ * readCameraCheck(mlResult) -- the reported-vs-detected camera cross-check as
+ * the three states migration 0021 stores, not the two the engines return.
+ *
+ * classifyCameraFamily.m can only compare the detected family against the
+ * family the reported device implies when that device is in
+ * calibrationProfiles.json's deviceAssociations. When it is not -- an
+ * unrecognised dropdown value, or no device reported at all -- it has nothing
+ * to compare against and returns mismatch = false.
+ *
+ * That false means "not checked". Storing it as false would record that this
+ * camera was verified against its own image, about a case where nobody could
+ * look. So the checkability test is expectedFamily, not mismatch:
+ *
+ *   expectedFamily non-empty -> the check ran; mismatch is its real answer
+ *   expectedFamily empty     -> NULL, and no expected family to show
+ *
+ * cameraExpectedFamily was added to runCasePipeline.m's output for exactly
+ * this; a result from an older engine that does not carry it is not-checkable
+ * by the same rule, which is the safe reading of a missing field.
+ */
+function readCameraCheck(mlResult) {
+  const expected = blankToNull(fromMatlab(mlResult.cameraExpectedFamily));
+  if (expected === null) return { mismatch: null, expectedFamily: null };
+  return { mismatch: mlResult.cameraMismatch === true, expectedFamily: expected };
 }
 
 const REGISTERED_MODELS = new Set();

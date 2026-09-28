@@ -35,7 +35,14 @@ export const LoginScreen = ({ onLogin }) => {
         setIsTransitioning(true);
         setTimeout(() => onLogin && onLogin({
           authenticated: true,
-          role: 'technician',
+          // The role the SERVER issued, not a constant. This used to be the
+          // literal 'technician' with the real role read only to pick a
+          // display label, so the app could not tell an admin from a
+          // technician -- and admin-only actions (revoking a paired phone)
+          // had no way to know whether to offer themselves. The backend is
+          // still the authority: requireTechnician.admin rejects a
+          // non-admin whatever the UI shows.
+          role: session.user.role,
           username: session.user.username,
           name: session.user.name,
           roleTitle: session.user.role === 'phc_admin' ? 'PHC Admin' : 'PHC Technician',
@@ -61,6 +68,10 @@ export const LoginScreen = ({ onLogin }) => {
           if (onLogin) {
             onLogin({
               authenticated: true,
+              // Mock mode has no server to ask, so it is a plain technician:
+              // the lower privilege, never an admin the demo did not grant.
+              // 'technician' and 'phc_admin' are the backend's own two values
+              // (scripts/technician.js); this must not invent a third.
               role: 'technician',
               username: username.trim(),
               name: username.toLowerCase().includes('krrish') ? 'Krrish Gadekar' : username.trim(),

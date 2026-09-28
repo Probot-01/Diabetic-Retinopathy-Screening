@@ -7,6 +7,9 @@ import { drGradeLabels } from '../../api/mockData';
 import { GradCamOverlay } from './GradCamOverlay';
 import { LesionEvidencePanel } from './LesionEvidencePanel';
 import { BranchComparisonPanel } from './BranchComparisonPanel';
+import { ProvenancePanel } from './ProvenancePanel';
+import { CaseStatusBanner } from './CaseStatusBanner';
+import { LesionAttentionMetric } from './LesionAttentionMetric';
 import { DecisionControls, describeOutcome } from './DecisionControls';
 import { CaseHistoryTimeline } from './CaseHistoryTimeline';
 import { InfoBanner } from '../shared/InfoBanner';
@@ -51,19 +54,6 @@ const SeverityBadge = ({ grade }) => {
  * time), then this opens the file the server hands back. A failure is shown
  * as a failure; there is no substitute document.
  */
-// [label, engine entry | null] for every ML output the API reports, in pipeline order.
-const SEG_LABELS = { vessel: 'VESSEL', localization: 'LOCALIZATION', hardExudate: 'HARD EXUDATE', redLesion: 'RED LESION' };
-const engineLabels = (p) => {
-  const g = p || {};
-  const seg = g.segmentation && typeof g.segmentation === 'object' ? g.segmentation : null;
-  return [
-    ['QUALITY GATE', g.qualityGate ?? null],
-    ['CLASSIFIER', g.classifier ?? null],
-    ...(seg ? Object.entries(SEG_LABELS).map(([k, l]) => [`SEG ${l}`, seg[k] ?? null]) : [['SEGMENTATION', null]]),
-    ['RULE ENGINE', g.ruleEngine ?? null],
-  ];
-};
-
 const ReportButton = ({ caseId }) => {
   const [state, setState] = useState({ busy: false, error: null, url: null });
   const generate = async () => {
@@ -231,6 +221,41 @@ export const CaseDetailPage = () => {
             <span className="badge badge--fail" data-testid="claimed-by-other">● CLAIMED BY {String(claimedBy).toUpperCase()}</span>
           )}
           <SeverityBadge grade={c.drGradeCnn} />
+
+          {/* WHY this case is in its tier, not just which tier.
+              Five different situations produce a "B" -- the model being
+              unsure, an unreliable fovea, an eye-laterality mismatch, a
+              camera on probation, or a camera nobody has validated -- and
+              they ask different things of the reviewer. The backend has
+              recorded the reason since migration 0015; showing only the
+              letter threw that away at the last step. */}
+          {c.conformalTier && (
+            <span
+              className="badge badge--neutral"
+              title={c.tierReason
+                || 'Reason not recorded: this case was graded before the reason was stored.'}
+              data-testid="tier-badge"
+            >
+              TIER {String(c.conformalTier).toUpperCase()}
+            </span>
+          )}
+
+          {/* The fovea gate. When it fires, the quadrant-based severe-NPDR
+              criteria (a) and (b) were SKIPPED for this eye, so the grade may
+              be an under-call. That is said inside the evidence prose; a
+              reviewer scanning the header should not have to read for it. */}
+          {c.foveaUnreliable === true && (
+            <span
+              className="badge badge--fail"
+              title={'The fovea could not be located reliably, so lesion quadrants '
+                + 'cannot be trusted. The quadrant-based severe-NPDR criteria were '
+                + 'not applied and this grade may be an under-call.'}
+              data-testid="fovea-unreliable-badge"
+            >
+              ⚠ FOVEA UNRELIABLE
+            </span>
+          )}
+
           {isBranchMismatch && (
             <span className="badge badge--fail case-detail__mismatch-badge">
               {t('central.caseDetail.mismatchWarning', '⚠ BRANCH MISMATCH — REVIEW REQUIRED')}
@@ -238,6 +263,12 @@ export const CaseDetailPage = () => {
           )}
         </div>
       </div>
+
+      {/* Whether this case HAS a grade at all. A failed case and one still
+          being graded both render every ML field as null, so without this
+          they read identically -- which api-contracts.md explicitly forbids.
+          Renders nothing once the case is graded. */}
+      <CaseStatusBanner caseData={c} />
 
       <InfoBanner title={t('central.caseDetail.banner.title', 'CLINICAL REVIEW GUIDANCE')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -288,11 +319,12 @@ export const CaseDetailPage = () => {
               value={c.uncertaintyScore}
               color="var(--c-warning)"
             />
-            <MetricBar
-              label={t('central.caseDetail.metrics.lesionConsistency', 'LESION-ATTENTION CONSISTENCY')}
-              value={c.lesionAttentionConsistencyScore}
-              color={c.lesionAttentionConsistencyScore !== null && c.lesionAttentionConsistencyScore > 0.6 ? 'var(--c-success)' : 'var(--c-crimson)'}
-            />
+            {/* NOT a MetricBar. The consistency score is an overlap fraction
+                and is meaningless without its chance level -- a bar coloured
+                red below 0.6 called a good heatmap on a lightly-diseased eye a
+                failure. LesionAttentionMetric shows the comparison instead,
+                and takes its pass/fail from the backend's own flag. */}
+            <LesionAttentionMetric caseData={c} />
           </div>
         </div>
 
@@ -317,11 +349,36 @@ export const CaseDetailPage = () => {
                   {c.patientReference || 'N/A'}
                 </p>
               </div>
+              {/* WHICH EYE, and on whose word. The image file's own DICOM tag
+                  wins over the technician's selection when both exist (SS10.4),
+                  and a DISAGREEMENT between them is surfaced rather than
+                  resolved silently -- filing a grade against the wrong eye is
+                  not a cosmetic error. The backend has served the source and
+                  the mismatch flag all along; this tile printed the winning
+                  value alone, which hid both. */}
               <div style={{ padding: 'var(--sp-3)', borderBottom: 'var(--border)' }}>
                 <span className="t-label" style={{ opacity: 0.5 }}>EYE</span>
                 <p className="t-mono" style={{ fontWeight: 700, textTransform: 'uppercase' }}>
                   {c.eyeLaterality || 'N/A'}
+                  {c.eyeLateralityMismatch === true && (
+                    <span
+                      className="badge badge--fail"
+                      style={{ marginLeft: 'var(--sp-2)' }}
+                      data-testid="eye-laterality-mismatch"
+                      title={'The image file reports one eye and the technician selected '
+                        + 'the other. The value shown is the file’s, which wins, but the '
+                        + 'disagreement is unresolved: confirm which eye this is before '
+                        + 'acting on the grade.'}
+                    >
+                      &#9888; DISPUTED
+                    </span>
+                  )}
                 </p>
+                <span className="t-mono" style={{ fontSize: 'var(--fs-tiny)', opacity: 0.55 }}>
+                  {c.eyeLateralitySource === 'dicom' ? 'from the image file’s own DICOM tag'
+                    : c.eyeLateralitySource === 'technician' ? 'as selected by the technician'
+                    : 'not recorded'}
+                </span>
               </div>
               <div style={{ padding: 'var(--sp-3)', borderRight: 'var(--border)' }}>
                 <span className="t-label" style={{ opacity: 0.5 }}>{t('central.caseDetail.context.diabetesDuration', 'DIABETES DURATION')}</span>
@@ -366,20 +423,15 @@ export const CaseDetailPage = () => {
                     : 'N/A'}
                 </p>
               </div>
-              {/* Which engine produced each ML output (engineProvenance). A null entry is
-                  shown as "not recorded", never guessed; a fallback engine is made visible. */}
-              <div style={{ padding: 'var(--sp-3)', borderTop: 'var(--border)', gridColumn: '1 / -1' }}>
-                <span className="t-label" style={{ opacity: 0.5 }}>ENGINES</span>
-                <p className="t-mono" style={{ fontWeight: 700, fontSize: 'var(--fs-tiny)', display: 'flex', flexWrap: 'wrap', gap: '2px var(--sp-4)' }} data-testid="engine-labels">
-                  {engineLabels(c.engineProvenance).map(([label, e]) => (
-                    <span key={label} title={e?.detail || undefined} style={{ whiteSpace: 'nowrap' }}>
-                      {label}: {e ? `${e.engine.toUpperCase()}${e.fallback ? ' (FALLBACK)' : ''}` : 'NOT RECORDED'}
-                    </span>
-                  ))}
-                </p>
-              </div>
             </div>
           </div>
+
+          {/* WHICH ENGINE produced each output, the classifier build behind the
+              grade, and what the image file says about itself. The quality-gate
+              engine used to sit as a lone tile in the context grid above; it is
+              one of seven engine entries the backend records, so it now lives
+              with the other six instead of standing in for them. */}
+          <ProvenancePanel caseData={c} />
         </div>
       </div>
 

@@ -114,6 +114,50 @@ class LocalApiClient {
     return data;
   }
 
+  /**
+   * searchPatients({ name, age, phone }) -> GET /patients/search
+   *
+   * The duplicate check (design doc SS10.3, backend plan SSB.1). The endpoint
+   * has existed on both this backend and the central one since B.1 and NO UI
+   * called it, so the same person registered twice became two patient records
+   * with two separate screening histories and nothing pointing between them.
+   *
+   * Returns candidates already ranked by the server, each with `matchedOn`
+   * saying WHICH field matched -- name, phone or age. That distinction is the
+   * point: two people can share a name, but a matching phone number is much
+   * stronger evidence of the same person, and the worker deciding needs to
+   * see which it was rather than a bare similarity score.
+   *
+   * Needs a name or a phone; the server rejects a search on age alone, which
+   * would return most of the register. Returns [] rather than throwing when
+   * there is nothing to search on, so a caller can call it on every keystroke
+   * without guarding.
+   */
+  async searchPatients({ name, age, phone } = {}) {
+    const hasName = typeof name === 'string' && name.trim().length >= 3;
+    const hasPhone = typeof phone === 'string' && phone.replace(/\D/g, '').length >= 4;
+    if (!hasName && !hasPhone) return [];
+
+    if (this.useMock) {
+      await delay(200);
+      const n = (name || '').trim().toLowerCase();
+      return mockData.mockPatients
+        .filter((p) => n && String(p.name || '').toLowerCase().includes(n))
+        .map((p) => ({ ...p, matchedOn: ['name'], score: 2 }));
+    }
+
+    const q = new URLSearchParams();
+    if (hasName) q.set('name', name.trim());
+    if (hasPhone) q.set('phone', phone);
+    if (age !== undefined && age !== null && age !== '') q.set('age', String(age));
+
+    const data = await this._request(`/patients/search?${q.toString()}`);
+    if (!Array.isArray(data)) {
+      throw new ApiError('bad_response', 'The patient search response was not a list.');
+    }
+    return data;
+  }
+
   /** registerPatient(patientData) -> POST /patients. Live: rejects on any failure. */
   async registerPatient(patientData) {
     if (this.useMock) {
@@ -274,6 +318,52 @@ class LocalApiClient {
       throw new ApiError('bad_response', 'The sync-status response did not have the expected shape.');
     }
     return data;
+  }
+
+  /**
+   * getPeerDevices() -> GET /peer/devices
+   *
+   * The phones paired with this PC (docs/peer-sync-protocol.md). A pairing key
+   * reads every patient record on this machine, so the list of who holds one
+   * is operational safety information, not a diagnostic curiosity.
+   *
+   * Returns [{ deviceId, name, createdAt, lastSeenAt, revokedAt }]. A revoked
+   * device stays in the list with revokedAt set -- the record of a phone that
+   * once had access does not get deleted.
+   */
+  async getPeerDevices() {
+    if (this.useMock) {
+      await delay(200);
+      return mockData.mockPeerDevices.map((d) => ({ ...d }));
+    }
+    const data = await this._request('/peer/devices');
+    if (!Array.isArray(data)) {
+      throw new ApiError('bad_response', 'The paired-devices response was not a list.');
+    }
+    return data;
+  }
+
+  /**
+   * revokePeerDevice(deviceId) -> POST /peer/devices/:id/revoke
+   *
+   * Cuts a phone off from this PC. Admin-only on the backend
+   * (requireTechnician.admin), which is the authority -- the UI hiding the
+   * button is a convenience, not the control.
+   *
+   * Resolves on the backend's 204. Mock mode REFUSES rather than pretending:
+   * revoking is a security action, and a demo that reports success without a
+   * backend would teach an operator that a phone is cut off when it is not.
+   */
+  async revokePeerDevice(deviceId) {
+    if (this.useMock) {
+      throw new ApiError('mock_mode',
+        'This is demo data. A paired phone can only really be revoked against the '
+        + 'live PHC backend, so this action is refused here rather than reported '
+        + 'as done.');
+    }
+    if (!deviceId) throw new ApiError('invalid_field', 'A device id is required to revoke.');
+    await this._request(`/peer/devices/${encodeURIComponent(deviceId)}/revoke`, { method: 'POST' });
+    return true;
   }
 }
 

@@ -157,6 +157,39 @@ export const mockSyncStatus = {
   lastSyncAttempt: '2026-09-06T09:40:00.000Z',
 };
 
+/**
+ * Phones paired with this PC (GET /peer/devices). Shapes only -- mock mode
+ * renders behind the DEMO DATA banner and cannot revoke anything, because a
+ * revoke that reports success without a backend would teach an operator that
+ * a lost phone is cut off when it is not.
+ *
+ * One revoked entry is included on purpose: a revoked device stays in the
+ * list rather than disappearing, so the screen has to render that state.
+ */
+export const mockPeerDevices = [
+  {
+    deviceId: 'ph-4a91c2e7b03f',
+    name: 'Outreach phone 1',
+    createdAt: '2026-09-02T06:10:00.000Z',
+    lastSeenAt: '2026-09-27T05:48:00.000Z',
+    revokedAt: null,
+  },
+  {
+    deviceId: 'ph-7c02de55a1b8',
+    name: 'Camp tablet',
+    createdAt: '2026-08-19T11:25:00.000Z',
+    lastSeenAt: '2026-09-11T14:02:00.000Z',
+    revokedAt: null,
+  },
+  {
+    deviceId: 'ph-1f88b30c7d24',
+    name: 'Old phone (replaced)',
+    createdAt: '2026-06-30T08:00:00.000Z',
+    lastSeenAt: '2026-08-04T09:15:00.000Z',
+    revokedAt: '2026-08-05T10:00:00.000Z',
+  },
+];
+
 export const cameraDevices = [
   { id: 'forus_3nethra_v2', label: 'Forus 3Nethra v2' },
   { id: 'remidio_fop', label: 'Remidio FOP' },
