@@ -471,7 +471,7 @@ That is deliberate and is not a placeholder. It never says "0 microaneurysms" â€
 - **`null` means NOT RECORDED**, and is never a guess from the server's current configuration. The object itself is always present with all four keys.
   - `classifier`, `segmentation` and `ruleEngine` are `null` on a case not graded yet, and on one graded before 2026-09-26.
   - `segmentation` is `null` when segmentation did not run for this case. That is the same fact `lesionCounts: null` states. A single model inside it is `null` when segmentation did not report that model.
-  - `qualityGate` is `null` when the capturing client did not report it: older PHC builds, the mobile app for now, and captures replicated between peer devices.
+  - `qualityGate` is `null` when the capturing client did not report it: older PHC builds and captures replicated between peer devices before 2026-09-27. The mobile app reports `js-device`, and peer sync carries the entry, from that date.
 
 ### `GET /api/v1/admin/system-health`: fields added 2026-09-20
 - `failedCases`: cases that gave up, grouped by `failureCode`, each with `count`, `lastFailedAt`, an `exampleReason` and an `exampleCaseId`. Separate from `stuckJobs` on purpose â€” a stuck case may still recover on its own, a failed one needs a person.

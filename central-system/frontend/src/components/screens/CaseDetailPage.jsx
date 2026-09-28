@@ -51,6 +51,19 @@ const SeverityBadge = ({ grade }) => {
  * time), then this opens the file the server hands back. A failure is shown
  * as a failure; there is no substitute document.
  */
+// [label, engine entry | null] for every ML output the API reports, in pipeline order.
+const SEG_LABELS = { vessel: 'VESSEL', localization: 'LOCALIZATION', hardExudate: 'HARD EXUDATE', redLesion: 'RED LESION' };
+const engineLabels = (p) => {
+  const g = p || {};
+  const seg = g.segmentation && typeof g.segmentation === 'object' ? g.segmentation : null;
+  return [
+    ['QUALITY GATE', g.qualityGate ?? null],
+    ['CLASSIFIER', g.classifier ?? null],
+    ...(seg ? Object.entries(SEG_LABELS).map(([k, l]) => [`SEG ${l}`, seg[k] ?? null]) : [['SEGMENTATION', null]]),
+    ['RULE ENGINE', g.ruleEngine ?? null],
+  ];
+};
+
 const ReportButton = ({ caseId }) => {
   const [state, setState] = useState({ busy: false, error: null, url: null });
   const generate = async () => {
@@ -353,14 +366,16 @@ export const CaseDetailPage = () => {
                     : 'N/A'}
                 </p>
               </div>
-              {/* Which engine ran the PHC's quality gate (engineProvenance.qualityGate).
-                  null is shown as "not recorded", never guessed. */}
+              {/* Which engine produced each ML output (engineProvenance). A null entry is
+                  shown as "not recorded", never guessed; a fallback engine is made visible. */}
               <div style={{ padding: 'var(--sp-3)', borderTop: 'var(--border)', gridColumn: '1 / -1' }}>
-                <span className="t-label" style={{ opacity: 0.5 }}>QUALITY GATE ENGINE</span>
-                <p className="t-mono" style={{ fontWeight: 700 }} title={c.engineProvenance?.qualityGate?.detail || undefined}>
-                  {c.engineProvenance?.qualityGate
-                    ? `${c.engineProvenance.qualityGate.engine.toUpperCase()}${c.engineProvenance.qualityGate.fallback ? ' (FALLBACK)' : ''}`
-                    : 'NOT RECORDED'}
+                <span className="t-label" style={{ opacity: 0.5 }}>ENGINES</span>
+                <p className="t-mono" style={{ fontWeight: 700, fontSize: 'var(--fs-tiny)', display: 'flex', flexWrap: 'wrap', gap: '2px var(--sp-4)' }} data-testid="engine-labels">
+                  {engineLabels(c.engineProvenance).map(([label, e]) => (
+                    <span key={label} title={e?.detail || undefined} style={{ whiteSpace: 'nowrap' }}>
+                      {label}: {e ? `${e.engine.toUpperCase()}${e.fallback ? ' (FALLBACK)' : ''}` : 'NOT RECORDED'}
+                    </span>
+                  ))}
                 </p>
               </div>
             </div>
