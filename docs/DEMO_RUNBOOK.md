@@ -16,6 +16,10 @@ Keep that terminal window visible off-camera.
 2. `node scripts/demo-reset.js` (about 4 minutes). It must end with `DEMO STACK READY` and exit 0.
    Exit 2 means a demo case did not get the outcome it needs (the table says which): re-run it.
 3. Open two browser windows: PHC desktop `http://localhost:5173`, central `http://localhost:5174`.
+   **Load each once, wait about 10 s and reload it.** The Vite dev servers were just started and reload
+   the page the first time they optimise dependencies; anything typed during that reload is lost.
+   If the browser still holds a previous run's session, the PHC app sends you to the login screen by
+   itself (it drops a stale session).
 4. Fixtures are in `tests/fixtures/`: `idrid_164_bad_blur_dark.jpg` (the reject),
    `idrid_010_good_pass_w1800.jpg` (passes) and `idrid_163_good_borderline.jpg` (accepted, borderline).
 5. Do not click **Log out** or reload the central web app while central is stopped (scene 4).
@@ -49,8 +53,8 @@ Nothing here is skippable, and nothing is pre-filled.
 4. Tick **Informed verbal consent**.
 5. Click **INITIATE CAPTURE**.
 
-*Expect:* the red "Still to answer before capture: ..." line lists what is missing and disappears as
-you answer; **INITIATE CAPTURE** opens the Image Capture page for this patient.
+*Expect:* the red "Still to answer before capture: ..." line, and the submit button's own label, list
+what is missing and clear as you answer; **INITIATE CAPTURE** opens the Image Capture page for this patient.
 *Say:* the questionnaire cannot be skipped, and consent is timestamped.
 *Recovery:* if the button does nothing, read the red line above it.
 

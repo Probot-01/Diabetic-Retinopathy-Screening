@@ -23,3 +23,25 @@ Found while running `docs/DEMO_RUNBOOK.md` end to end against real services, eac
   Automation tooling only, not the product: typing works, and so does the app for a person.
 - **The mobile scene needs a phone.** The runs below used the mobile app's own sync stack
   (`npm run test:sync` against live central) as the stand-in, as the runbook describes.
+
+## Run log
+
+Both runs: `node scripts/demo-reset.js` (exit 0, all five demo cases verified), then every scene of
+`docs/DEMO_RUNBOOK.md` in order, through the real PHC desktop and central web apps in a browser.
+
+| Run | Reset | Result |
+|---|---|---|
+| 1 (after fixes 1-5) | 236 s | Scenes 1-11 passed. Two cases created (one online, one while central was stopped); both reached RESULT READY and the reviewer queue; one confirmed, one overridden to grade 3; three referrals; dashboard and PHC health as documented; mobile case shows QUALITY GATE: JS-DEVICE. |
+| 2 (same code) | 268 s | Scenes 1-11 passed again, including a stale browser session from run 1 (sent to login by fix 5). |
+
+Two caveats, both stated plainly:
+- **Central sign-in.** The scroll-driven intro cannot be driven in the automated browser window (its
+  animation never advances; `docs/DEMO.md` says the same). The sign-in used the page's own
+  `POST /api/v1/auth/login`, the request the form makes. The form was seen working once (typing and
+  submit reached the backend, which is how bug 4 surfaced). It has to be shown by a person.
+- **Mobile scene.** No phone in the loop. The stand-in is the app's own sync stack
+  (`test:sync`, happy path) against live central; the resulting case appeared in the reviewer queue and
+  its `engineProvenance.qualityGate` was `js-device`.
+
+Operational notes that are not bugs: the first page load after a reset reloads once (runbook step);
+the quality gate takes 10-15 s per capture (a fresh `matlab -batch`).
