@@ -81,6 +81,13 @@ class LocalApiClient {
       clearTimeout(timer);
     }
     const body = await res.json().catch(() => null);
+    if (res.status === 401 && path !== '/auth/login') {
+      // The stored technician session is no longer valid (expired, or the backend's accounts were
+      // reset). Keeping it would leave every screen failing with a misleading "unreachable":
+      // drop it and go back to the login screen.
+      try { localStorage.removeItem('netra_phc_auth'); } catch { /* storage unavailable */ }
+      if (typeof window !== 'undefined' && window.location.pathname !== '/') window.location.assign('/');
+    }
     if (!res.ok) {
       throw new ApiError(body?.error || `http_${res.status}`,
         body?.message || `${res.status} ${res.statusText} from ${path}`, res.status, body);
