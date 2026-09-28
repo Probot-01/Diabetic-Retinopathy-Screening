@@ -134,8 +134,11 @@ async function startAndWait() {
   const logs = {
     central: stack.startCentral(cfg2),
     phc: stack.startNode('phc-backend', PHC_DIR, path.join(PHC_DIR, 'server.js')),
-    centralWeb: stack.startVite('central-web', stack.CENTRAL_WEB_DIR),
-    phcWeb: stack.startVite('phc-web', stack.PHC_WEB_DIR),
+    // Same for the central web app's /api proxy: it must point at THIS checkout's central port.
+    centralWeb: stack.startVite('central-web', stack.CENTRAL_WEB_DIR, { CENTRAL_API_PROXY_TARGET: `http://localhost:${cfg2.ports.central}` }),
+    // The PHC web app must talk to THIS checkout's backend port, whatever its .env still says
+    // (a real environment variable beats .env in Vite). A stale :4000 shows "Cannot reach the PHC backend".
+    phcWeb: stack.startVite('phc-web', stack.PHC_WEB_DIR, { VITE_LOCAL_API_BASE: `http://localhost:${cfg2.ports.phc}` }),
   };
   const p = cfg2.ports;
   await stack.waitFor('PHC backend /health', () => stack.httpOk(`http://localhost:${p.phc}/health`), 90000);
@@ -326,7 +329,11 @@ function report(made, creds, cfg2, ready) {
     report(made, creds, cfg2, ready);
     process.exitCode = ready ? 0 : 2;
   } catch (err) {
-    console.error(`\ndemo-reset FAILED: ${err.message}\nService logs: ${stack.logDir()}`);
+    // A refused connection is an AggregateError with an empty message (localhost -> ::1 and 127.0.0.1).
+    const codes = (err.errors || [err]).map((e) => e.code).filter(Boolean);
+    const detail = err.message || (codes.length ? codes.join(', ') : String(err));
+    const hint = codes.includes('ECONNREFUSED') ? '\nIs Postgres up? Start Docker Desktop, then: npm run db:up' : '';
+    console.error(`\ndemo-reset FAILED: ${detail}${hint}\nService logs: ${stack.logDir()}`);
     process.exitCode = 1;
   }
 })();
