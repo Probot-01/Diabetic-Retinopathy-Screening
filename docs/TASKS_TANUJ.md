@@ -2,6 +2,7 @@
 
 From `docs/INTEGRATION_AUDIT.md` (2026-09-29), split so you and Saad can work in parallel. Full evidence for every
 item is in that file; this is the action list. Saad's half is `docs/TASKS_SAAD.md` — don't duplicate his items.
+**All frontend work, both web apps, is deliberately kept under you** — one person on frontend beats two.
 
 Deployment (Vercel frontends, Render backends, where the models and DB live) is explicitly **out of scope until
 after the video** — do not spend time on it now.
@@ -49,8 +50,6 @@ today, 9:12 AM from Pune". `CentralSettingsPage.jsx`'s toggles (PIN/fingerprint,
   don't and are not coming back (PIN unlock, Wi-Fi-only, low-data mode aren't relevant to a web app anyway).
 - Also delete `FieldOpsPage.jsx` (`central-system/frontend/src/components/screens/`) — it's dead code with its own
   fake PHC list, not routed anywhere, just clutter.
-- If you'd rather hand this to Kankshi or Vedant, it's a clean, self-contained frontend task — do that if you're
-  tight on time, they don't need backend context for it.
 
 ### 4. Decide + do: which P1 desktop features make the cut
 You said "no single preference, but priority" — here's mine, in order. Pick where to stop:
@@ -71,6 +70,7 @@ already when your laptop's IP changed. If the mobile app is going in the video:
 ## Also yours (quick, whenever there's a gap)
 
 - **Continual learning wording** — per your call, it's DB-only for this round (doctor corrections stored, no retraining). Find the note in `docs/system-design-v4.md` (§16 Tier 2, item 9 / §17) and `docs/backend-plan-status.md` (Continual Learning row) that implies it's wired, and make sure they say "corrections captured and exportable; retraining is a manual, future-round step" — not "dormant" or "planned but unclear." One sentence each, so nobody reading the docs cold thinks it's broken.
+- **Simulink validation table formatting** — `/admin/resources` prints raw floats like `39.95160468670402%` (`ResourceRecommendationsPanel.jsx`). Round to 1 decimal — a demo screenshot with 14 decimal places looks like a bug even though the number's real.
 - **Open the PR** `integration` → `main` once you and Saad are both done and `demo-reset` + the runbook (`docs/DEMO_RUNBOOK.md`) pass clean. `origin/main` is currently 6 of your commits behind `integration`.
 - **Decide before recording:** is the video showing the mobile app? (affects item 5's urgency) — and are you showing `/admin/phc-health` on camera? It currently shows a real "1 OF 4 CHECKS TRIPPED" banner because the seeded second PHC never contacts central. Correct, but red; `docs/DEMO.md` already flags this as a presenter's call.
 

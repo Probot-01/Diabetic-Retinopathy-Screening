@@ -65,8 +65,9 @@ broke, since `sharp` is load-bearing for the JS quality-gate fallback.
 - **Tracked `__pycache__/*.pyc`** (3 files under `ml-pipeline/preprocessing/`) show up dirty on every run — `git rm --cached` them and add `__pycache__/` to `.gitignore` if it isn't there already.
 - **Repo clutter**: `experimenting Frontend/`, duplicate `docs/*(1).md` files, `ml-pipeline/training/diag*.py` + their `*_out.txt`/`*_err.txt`, `test_output_*.png` — worth a tidy-up commit, not urgent.
 - **Encryption-at-rest / backup**: `docs/backend-plan-status.md` already documents that OS-level Device Encryption is the remaining piece (someone with admin on the machine has to switch it on) — no code change, just make sure it actually gets turned on before demo day if the machine will have real-looking data on it. Also worth a one-paragraph `pg_dump`/restore note somewhere (`docs/DEMO_SETUP.md` seems the right place) since there currently isn't one.
-- **Simulink validation table formatting** — `/admin/resources` prints raw floats like `39.95160468670402%`. Round to 1 decimal in `ResourceRecommendationsPanel.jsx` (or wherever it's rendered) — a demo screenshot with 14 decimal places looks like a bug even though the number's real.
 - **Peer pairing / technician accounts are CLI-only** (`npm run peer -- pair`, `npm run technician -- add`) — fine for a demo run by you or Tanuj, but if there's a screen recording planned of setting up a fresh PHC, this needs to be in the runbook narration since there's no UI for it yet (the revoke side already has one, `PairedDevicesPage.jsx`).
+
+(The Simulink validation table's raw-float display is a `.jsx` edit — Tanuj's file, since frontend stays with him.)
 
 ## When you're both done
 
