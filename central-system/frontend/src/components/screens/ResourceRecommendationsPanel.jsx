@@ -259,13 +259,18 @@ export const ResourceRecommendationsPanel = () => {
           <div style={{ borderLeft: '3px solid #14B8A6', paddingLeft: '12px' }}>
             <div className="t-mono" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-text)' }}>REVIEW SERVICE TIME</div>
             <div className="t-mono" style={{ fontSize: '11px', color: 'var(--c-text-muted)', marginTop: '4px' }}>
-              {inputsSource.reviewServiceTime}
+              {/* The backend has never computed a per-source label for this one
+                  specifically -- resourceRecommendations.js's gatherInputs()
+                  only ever sets a single combined `source.other` disclaimer
+                  covering review time, bandwidth tiers and image size together.
+                  Fall back to that rather than render this cell blank. */}
+              {inputsSource.reviewServiceTime || inputsSource.other}
             </div>
           </div>
           <div style={{ borderLeft: '3px solid #F97316', paddingLeft: '12px' }}>
             <div className="t-mono" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-text)' }}>ARRIVAL PATTERNS</div>
             <div className="t-mono" style={{ fontSize: '11px', color: 'var(--c-text-muted)', marginTop: '4px' }}>
-              {inputsSource.arrivalPattern}
+              {inputsSource.arrivalPattern || inputsSource.other}
             </div>
           </div>
         </div>
