@@ -326,9 +326,9 @@ export const ResourceRecommendationsPanel = () => {
                 {validation.checks.map((chk, idx) => (
                   <tr key={idx}>
                     <td className="t-mono" style={{ fontWeight: 700 }}>{chk.metric}</td>
-                    <td className="t-mono u-text-right">{chk.simEvents}{chk.unit}</td>
-                    <td className="t-mono u-text-right">{chk.reference}{chk.unit}</td>
-                    <td className="t-mono u-text-right">±{chk.tolerance}{chk.unit}</td>
+                    <td className="t-mono u-text-right">{round1(chk.simEvents)}{chk.unit}</td>
+                    <td className="t-mono u-text-right">{round1(chk.reference)}{chk.unit}</td>
+                    <td className="t-mono u-text-right">±{round1(chk.tolerance)}{chk.unit}</td>
                     <td>
                       <span className={`badge ${chk.agree ? 'badge--pass' : 'badge--fail'}`}>
                         {chk.agree ? 'AGREE' : 'DIVERGED'}
