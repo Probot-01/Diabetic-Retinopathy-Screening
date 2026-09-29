@@ -1,4 +1,4 @@
-# Backend plan: status against `implementation-plan-backend-saad (1).md`
+# Backend plan: status against `implementation-plan-backend-saad.md`
 
 Status as of 2026-09-23 (late). Sections marked "Since 2026-09-22" and the "Waiting on other people" list are the current ones; earlier sections are kept as the record of when each thing was verified. Every item below was verified by running it, not by reading code. The test scripts named in the table can be re-run.
 
@@ -398,7 +398,7 @@ Caveat: 5-fold CV said QWK 0.863, the held-out test said 0.692. Trust the held-o
 - **Also worth telling him** (not blocking us):
   - `verifyPhase4.m`'s crash is diagnosed and fixed — it was `models/` missing from the path, not a corrupt model. Three further defects in the same function are fixed with it.
   - His reports describe v2c as "deployed"; the code default is `branchA_v1`, and will stay so until the binary above arrives. Nothing in a slide should say v2c yet.
-  - `docs/implementation-plan-backend-saad (1).md` and `implementation-plan-ml-tanuj (1).md` are browser-download duplicates he committed; the second one REPLACED the original by rename, so it should be renamed back rather than deleted.
+  - ~~`docs/implementation-plan-backend-saad (1).md` and `implementation-plan-ml-tanuj (1).md` are browser-download duplicates~~ **Done 2026-09-29.** The saad one was byte-identical to its original and was removed; the tanuj one was the ONLY copy (its original was gone, replaced by the rename) and was renamed back rather than deleted, which is what the warning here was for.
 - **Frontend team:**
   - The login screen: `credentials: 'include'` plus the `X-CSRF-Token` header.
   - The claim flow and the disagreement rule (Confirm unavailable on disagreement cases).
