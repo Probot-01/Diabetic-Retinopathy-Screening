@@ -148,10 +148,13 @@ Three docs currently disagree with this and with each other:
 | `TASKS_TANUJ.md` (this session's own file) | "still v1" — **wrong, matches the stale line above, not the code** |
 | `api-contracts.md:462` (dated "as of 2026-09-20") | "`microaneurysms` and `hemorrhages` are `null`... M5 detects red lesions as a SINGLE class today... They become real numbers when Tanuj's 3-class retrain lands" | **Stale.** The retrain has landed and is the default. `services/lesionCounts.js`'s mapping (`toContractShape`) already reads `stored.maTotal`/`stored.heTotal` and emits real numbers whenever they're present — confirmed by reading the code, not assumed. Any case graded right now under the default config should already return non-null `microaneurysms`/`hemorrhages`, not null. |
 
-**This one is worth resolving before demo night**, separately from the metrics/auth items above: if a
-screenshot or live demo shows `microaneurysms`/`hemorrhages` as real numbers, that's *correct* and shouldn't
-be second-guessed as a bug against the stale doc language; if it shows `null`, something else is wrong (config
-override somewhere not found in this sweep, or a case graded before the switch) and is worth a direct look.
+**Confirmed live, not just theoretical:** queried the central Postgres DB directly
+(`segmentation_outputs.lesion_counts`) — every stored row checked carries `"redLesionModelVersion": "v2"` with
+real, non-zero `maTotal`/`heTotal` (e.g. one real case: `maTotal: 45, heTotal: 15, redTotal: 41`). So this
+isn't a "should be fixed by now" — it's already happening on every case in the live database. If a screenshot
+or the demo shows `microaneurysms`/`hemorrhages` as real numbers, that is correct and matches the database, not
+a bug against the stale `api-contracts.md` line. `api-contracts.md:462`'s "as of 2026-09-20... null" note should
+be updated (or dated-and-superseded) whenever contract doc edits are next in scope — it's simply wrong today.
 
 ---
 
@@ -233,7 +236,5 @@ either stale or current:
   a corrected v4, given the calibration-contamination caveat in §3.1.
 - Whether to fold the §3 corrections back into `system-design-v4.md` now, later, or not at all before the
   video (explicitly held out of scope for this file, per instruction).
-- Whether the `RED_LESION_MODEL_VERSION=v2`-is-already-default fact (§4) changes anything about tomorrow's
-  demo — worth a quick live check that a real case actually shows non-null MA/HE counts before recording.
 - Whether it's worth re-running `ppt-audit`'s methodology fresh before the video, given how much of it has
   already flipped in both directions since 2026-09-25.
