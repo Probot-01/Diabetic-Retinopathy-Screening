@@ -15,14 +15,18 @@ import { CaseHistoryTimeline } from './CaseHistoryTimeline';
 import { InfoBanner } from '../shared/InfoBanner';
 import { LoadError } from '../shared/LoadError';
 
-const MetricBar = ({ label, value, maxVal = 1, color = 'var(--c-crimson)' }) => {
+const MetricBar = ({ label, value, maxVal = 1, color = 'var(--c-crimson)', nullReason }) => {
   const pct = Math.round((value / maxVal) * 100);
   return (
     <div className="u-mb-4">
       <div className="u-flex u-justify-between u-items-center" style={{ marginBottom: 'var(--sp-1)' }}>
         <span className="t-label">{label}</span>
-        <span className="t-mono" style={{ fontWeight: 700, fontSize: 'var(--fs-small)' }}>
-          {typeof value === 'number' ? `${pct}%` : 'NOT COMPUTED'}
+        <span
+          className="t-mono"
+          style={{ fontWeight: 700, fontSize: 'var(--fs-small)' }}
+          title={typeof value !== 'number' ? nullReason : undefined}
+        >
+          {typeof value === 'number' ? `${pct}%` : (nullReason ? 'NOT COMPUTED UNDER THIS ENGINE' : 'NOT COMPUTED')}
         </span>
       </div>
       <div className="bar">
@@ -335,6 +339,16 @@ export const CaseDetailPage = () => {
               label={t('central.caseDetail.metrics.uncertainty', 'UNCERTAINTY')}
               value={c.uncertaintyScore}
               color="var(--c-warning)"
+              // Saad P1-2 / INTEGRATION_AUDIT.md P1-4: MC-dropout returns null
+              // whenever the classifier ran on the MATLAB backend (the default) --
+              // that engine's imported network's forward() is deterministic, not a
+              // missing feature. A bare "NOT COMPUTED" reads like a bug; naming the
+              // engine is the honest, cheap fix design docs already call out as
+              // acceptable ("disclose it as not measured") over the much larger
+              // engineering cost of wiring real MC-dropout through MATLAB.
+              nullReason={c.uncertaintyScore == null && c.engineProvenance?.classifier?.engine === 'matlab'
+                ? 'Uncertainty (MC-dropout) is not computed on the MATLAB classifier backend -- only under the Python backend (INFERENCE_BACKEND=python). This case was graded on MATLAB, the default.'
+                : undefined}
             />
             {/* NOT a MetricBar. The consistency score is an overlap fraction
                 and is meaningless without its chance level -- a bar coloured
