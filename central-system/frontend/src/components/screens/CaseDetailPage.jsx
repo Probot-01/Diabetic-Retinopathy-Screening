@@ -15,13 +15,17 @@ import { CaseHistoryTimeline } from './CaseHistoryTimeline';
 import { InfoBanner } from '../shared/InfoBanner';
 import { LoadError } from '../shared/LoadError';
 
-const MetricBar = ({ label, value, maxVal = 1, color = 'var(--c-crimson)' }) => {
+const MetricBar = ({ label, value, maxVal = 1, color = 'var(--c-crimson)', nullReason }) => {
   const pct = Math.round((value / maxVal) * 100);
   return (
     <div className="u-mb-4">
       <div className="u-flex u-justify-between u-items-center" style={{ marginBottom: 'var(--sp-1)' }}>
         <span className="t-label">{label}</span>
-        <span className="t-mono" style={{ fontWeight: 700, fontSize: 'var(--fs-small)' }}>
+        <span
+          className="t-mono"
+          style={{ fontWeight: 700, fontSize: 'var(--fs-small)' }}
+          title={typeof value !== 'number' ? nullReason : undefined}
+        >
           {typeof value === 'number' ? `${pct}%` : 'NOT COMPUTED'}
         </span>
       </div>
@@ -342,15 +346,26 @@ export const CaseDetailPage = () => {
                  uncertainty. A confidently wrong out-of-distribution image
                  scores LOW, which is the opposite of what a reader assumes a
                  high-uncertainty flag protects them from. */
-              title={c.uncertaintyScore === null || c.uncertaintyScore === undefined
-                ? 'Not computed for this case. Not a score of zero: zero would mean '
-                  + 'the model was maximally certain.'
-                : 'Normalised predictive entropy over 20 Monte-Carlo dropout passes '
+              title={typeof c.uncertaintyScore === 'number'
+                ? 'Normalised predictive entropy over 20 Monte-Carlo dropout passes '
                   + '(0 = certain, 1 = uniform across all five grades). It samples the '
                   + 'classifier HEAD over fixed image features, so it measures whether '
                   + 'the classifier is torn between grades — it cannot see that an '
                   + 'image is unlike anything the model was trained on. A confidently '
-                  + 'wrong out-of-distribution image scores LOW here.'}
+                  + 'wrong out-of-distribution image scores LOW here.'
+                : undefined}
+              // Kept from Tanuj's fallback (2582cbf), with the reason corrected.
+              // His version said uncertainty "is not computed on the MATLAB
+              // classifier backend -- only under Python", which was true when he
+              // wrote it and is not any more: mcDropoutMatlab.m now computes it
+              // there too. A null on a MATLAB-graded case therefore means the
+              // case predates that wiring, or the measurement itself failed --
+              // never that the engine cannot do it.
+              nullReason={c.uncertaintyScore == null
+                ? 'Not computed for this case. Not a score of zero — zero would mean '
+                  + 'the model was maximally certain. Cases graded before MC-dropout was '
+                  + 'wired on this engine have no value stored; re-grading computes one.'
+                : undefined}
             />
             {/* NOT a MetricBar. The consistency score is an overlap fraction
                 and is meaningless without its chance level -- a bar coloured

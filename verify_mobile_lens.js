@@ -26,10 +26,31 @@ async function runTests() {
     }
   }
 
+  // A hardcoded patientId from a previous run's database doesn't survive a
+  // fresh DB (demo-reset, a clean clone, a different machine) -- register
+  // one of our own, same as any real capture would need. contactNumber and
+  // name are the only two the route actually requires (routes/patients.js).
+  const regRes = await fetch(`${BASE_URL}/patients`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Verify MobileLens Testpatient',
+      contactNumber: '+919999999999',
+      age: '45',
+    }),
+  });
+  const regData = await regRes.json();
+  if (regRes.status !== 201 || !regData.patientId) {
+    console.error('Could not register a test patient:', regRes.status, regData);
+    process.exit(1);
+  }
+  const PATIENT_ID = regData.patientId;
+  console.log(`  -> Registered test patient ${PATIENT_ID}`);
+
   // 1. Test missing patientId
   let form = new FormData();
   form.append('image', new Blob([fs.readFileSync(IMAGE_PATH)], { type: 'image/jpeg' }), 'test.jpg');
-  
+
   let res = await fetch(`${BASE_URL}/captures/mobile`, {
     method: 'POST',
     body: form,
@@ -42,7 +63,7 @@ async function runTests() {
 
   // 2. Test missing image
   form = new FormData();
-  form.append('patientId', 'PHC001-mtrrivyw-jsch');
+  form.append('patientId', PATIENT_ID);
   res = await fetch(`${BASE_URL}/captures/mobile`, {
     method: 'POST',
     body: form,
@@ -52,7 +73,7 @@ async function runTests() {
 
   // 3. Test successful request with patientId and image
   form = new FormData();
-  form.append('patientId', 'PHC001-mtrrivyw-jsch');
+  form.append('patientId', PATIENT_ID);
   form.append('image', new Blob([fs.readFileSync(IMAGE_PATH)], { type: 'image/jpeg' }), 'test.jpg');
 
   console.log('  -> Submitting valid image to /captures/mobile (this will spawn MATLAB and take a few seconds...)');
