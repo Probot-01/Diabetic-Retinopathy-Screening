@@ -41,7 +41,24 @@ export const BranchComparisonPanel = ({ caseData }) => {
 
       {/* Agreement Status */}
       <div className={`branch-agreement-bar ${isMismatch ? 'branch-agreement-bar--mismatch' : ''}`}>
-        {c.branchAgreement === null ? (
+        {c.branchAgreement === null && c.drGradeRuleEngine !== null && c.drGradeRuleEngine !== undefined ? (
+          /* Branch B RAN -- its grade is on this very panel -- but agreement is
+             undecidable, so this must not read "not available". The rule engine
+             caps its output at RULE_MAX_GRADE (3), and a grade sitting on that
+             cap means ">= 3, and I cannot tell which" rather than "= 3", so
+             branchesAgree.m returns null rather than inventing a verdict. That
+             is 106 of the graded cases in this database, every one of them
+             cnn=3 / rule=3, and every one of them was being labelled
+             single-branch mode next to a visible Branch B grade of 3.
+             generateReport.m's PDF has always worded this correctly; this
+             screen did not. */
+          <span className="t-mono" style={{ fontWeight: 700 }}
+            title={'The rule engine stops at grade 3, so a 3 from it means "grade 3 or worse". '
+              + 'It cannot confirm or contradict a classifier grade of 3 or above, which is not '
+              + 'the same as the branches disagreeing.'}>
+            AGREEMENT NOT ESTABLISHED — RULE ENGINE IS AT ITS CEILING (GRADE {c.drGradeRuleEngine} MEANS &ldquo;OR WORSE&rdquo;)
+          </span>
+        ) : c.branchAgreement === null ? (
           <span className="t-mono" style={{ opacity: 0.3 }}>BRANCH B NOT YET AVAILABLE — SINGLE-BRANCH MODE</span>
         ) : c.branchAgreement ? (
           <span className="t-mono" style={{ color: 'var(--c-success)', fontWeight: 700 }}>

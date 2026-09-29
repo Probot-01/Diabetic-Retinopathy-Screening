@@ -1951,6 +1951,12 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
+  /* The viewer is square and the images are not: the raw capture is whatever
+     the camera produced (570x375 on a real case) and the Grad-CAM is the
+     512x512 Ben Graham crop. Without this they were stretched to fit, which
+     distorts the retina and changes apparent lesion geometry -- the one thing
+     someone looks at this panel to judge. */
+  object-fit: contain;
 }
 
 .gradcam-viewer__overlay {

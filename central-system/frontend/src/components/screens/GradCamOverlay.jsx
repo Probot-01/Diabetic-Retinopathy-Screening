@@ -2,30 +2,55 @@ import React, { useRef, useEffect, useState } from 'react';
 import { CENTRAL_API_BASE, USE_MOCK_DATA } from '../../config';
 
 /**
- * GradCamOverlay — real case: renders the actual fundus image with the real
- * Grad-CAM PNG (produced by branchAInfer.py) as an absolutely-positioned
- * semi-transparent layer on top, toggled by showOverlay. imageUrl/
- * gradCamOverlayUrl come back from the API as paths under /media (e.g.
- * "/media/cases/<id>/original.jpg"), served by the central backend itself —
- * not the frontend dev server — so they're resolved against CENTRAL_API_BASE.
+ * RealGradCam — the fundus image, or the Grad-CAM, but never one stacked on
+ * the other.
  *
- * No image (imageUrl null): mock mode draws the procedurally generated
- * synthetic retina; live mode shows why there is no image (see GradCamOverlay).
+ * ── WHY NOT STACKED ────────────────────────────────────────────────────────
+ * This used to render original.jpg and then lay gradcam.png over it at 0.75
+ * opacity. That was wrong twice over, and the second one is not cosmetic:
+ *
+ *   1. gradcam.png ALREADY CONTAINS THE FUNDUS. Both producers blend it in
+ *      before writing the file -- gradCam.m does 0.60*original + 0.40*heatmap,
+ *      and gradcam.py's save_overlay() does the same with alpha=0.4. Laying it
+ *      over the original composited the retina with itself and washed the
+ *      whole frame in jet's blue low end.
+ *
+ *   2. THE TWO IMAGES ARE DIFFERENT CROPS. original.jpg is the raw upload
+ *      (measured on a real case: 570x375, aspect 1.52). gradcam.png is built on
+ *      the Ben Graham crop and is square (512x512). Stretched to the same box
+ *      by CSS, the heatmap sat over a retina it does not correspond to -- so
+ *      the hotspot pointed at the WRONG PART OF THE EYE. A reviewer using
+ *      Grad-CAM to ask "is the model looking at the lesions?" was being shown
+ *      an answer to a different question.
+ *
+ * So the toggle swaps the image rather than compositing: off shows the capture,
+ * on shows the Grad-CAM, which carries its own correctly-registered fundus and
+ * is aligned to the heatmap by construction.
+ *
+ * object-fit: contain on both, because the viewer is square and neither image
+ * is. Stretching a fundus to fit changes apparent lesion geometry, which is the
+ * one thing this panel exists to let someone judge by eye.
+ *
+ * imageUrl/gradCamOverlayUrl come back from the API as paths under /media,
+ * served by the central backend itself -- not the frontend dev server -- so
+ * they're resolved against CENTRAL_API_BASE.
  */
 const RealGradCam = ({ showOverlay, caseData, onLoadError }) => {
   const imageSrc = `${CENTRAL_API_BASE}${caseData.imageUrl}`;
   const overlaySrc = caseData.gradCamOverlayUrl ? `${CENTRAL_API_BASE}${caseData.gradCamOverlayUrl}` : null;
 
+  const showingCam = showOverlay && !!overlaySrc;
+
   return (
     <div className="gradcam-viewer">
-      <img src={imageSrc} alt="Fundus capture" className="gradcam-viewer__fundus" onError={onLoadError} />
-      {overlaySrc && (
-        <img
-          src={overlaySrc}
-          alt="Grad-CAM attention overlay"
-          className={`gradcam-viewer__overlay ${showOverlay ? 'gradcam-viewer__overlay--visible' : ''}`}
-        />
-      )}
+      <img
+        src={showingCam ? overlaySrc : imageSrc}
+        alt={showingCam
+          ? 'Grad-CAM attention map over the classifier’s cropped view of this fundus'
+          : 'Fundus capture'}
+        className="gradcam-viewer__fundus"
+        onError={onLoadError}
+      />
       <div className="capture-zone__crosshair" />
       <div className="gradcam-viewer__brackets">
         <span className="gradcam-viewer__bracket gradcam-viewer__bracket--tl" />
