@@ -335,6 +335,22 @@ export const CaseDetailPage = () => {
               label={t('central.caseDetail.metrics.uncertainty', 'UNCERTAINTY')}
               value={c.uncertaintyScore}
               color="var(--c-warning)"
+              /* The scope caveat travels with the number, the way the urgency
+                 limitation does. MC-dropout here samples ONE dropout layer on
+                 the classifier head, over features the trunk fixed -- so it
+                 measures the head's uncertainty and cannot see representation
+                 uncertainty. A confidently wrong out-of-distribution image
+                 scores LOW, which is the opposite of what a reader assumes a
+                 high-uncertainty flag protects them from. */
+              title={c.uncertaintyScore === null || c.uncertaintyScore === undefined
+                ? 'Not computed for this case. Not a score of zero: zero would mean '
+                  + 'the model was maximally certain.'
+                : 'Normalised predictive entropy over 20 Monte-Carlo dropout passes '
+                  + '(0 = certain, 1 = uniform across all five grades). It samples the '
+                  + 'classifier HEAD over fixed image features, so it measures whether '
+                  + 'the classifier is torn between grades — it cannot see that an '
+                  + 'image is unlike anything the model was trained on. A confidently '
+                  + 'wrong out-of-distribution image scores LOW here.'}
             />
             {/* NOT a MetricBar. The consistency score is an overlap fraction
                 and is meaningless without its chance level -- a bar coloured
