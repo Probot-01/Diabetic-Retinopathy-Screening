@@ -261,6 +261,23 @@ export const CaseDetailPage = () => {
               {t('central.caseDetail.mismatchWarning', '⚠ BRANCH MISMATCH — REVIEW REQUIRED')}
             </span>
           )}
+
+          {/* Design doc §10.2: the PHC technician sent this image after it failed
+              the local quality gate, rather than retaking forever or dropping
+              the patient. Carried inside captureMetadata (additive, no contract
+              change) since it comes from the PHC front-ends, not the grading
+              pipeline. The grade above still reflects whatever the classifier
+              said about a genuinely substandard image -- this badge is the
+              reviewer's warning that it may not be trustworthy. */}
+          {c.captureMetadata?.bestEffort === true && (
+            <span
+              className="badge badge--fail"
+              title="The PHC's local quality gate rejected this image; the technician sent it anyway as best effort, after repeated failed retakes, rather than leave the patient unscreened."
+              data-testid="best-effort-badge"
+            >
+              ⚠ BEST EFFORT — FAILED LOCAL QUALITY GATE
+            </span>
+          )}
         </div>
       </div>
 

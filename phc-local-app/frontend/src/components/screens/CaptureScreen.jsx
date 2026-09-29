@@ -194,6 +194,28 @@ export const CaptureScreen = () => {
 
   const handleAcceptQuality = () => setActiveStep(3);
 
+  // §10.2: technician marks a repeatedly-failed capture "best effort -- proceed
+  // as ungradable" rather than retaking forever. The backend call is what
+  // actually queues it (a plain 'retake' never queues itself); this screen then
+  // moves on to step 3 exactly as a real pass would, so metadata is still
+  // collected for the case that is now, genuinely, on its way to central.
+  const [bestEffortError, setBestEffortError] = useState(null);
+  const handleBestEffort = async () => {
+    if (!qualityResult?.captureId) return;
+    setBestEffortError(null);
+    setIsAnalyzing(true);
+    try {
+      const updated = await localApi.markBestEffort(qualityResult.captureId);
+      setQualityResult((prev) => ({ ...prev, bestEffort: updated?.bestEffort ?? true }));
+      setActiveStep(3);
+    } catch (err) {
+      console.error('Failed to mark capture as best effort:', err);
+      setBestEffortError(err);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const missingForSave = () => {
     if (USE_MOCK_DATA) return [];
     try {
@@ -462,10 +484,14 @@ export const CaptureScreen = () => {
                   RETAKE ATTEMPT {qualityResult.retakeCount + 1} FOR THIS PATIENT TODAY
                 </div>
               )}
+              {bestEffortError && (
+                <LoadError error={bestEffortError} title="COULD NOT MARK AS BEST EFFORT" compact />
+              )}
               <QualityResultPanel
                 result={qualityResult}
                 onRetake={handleRetake}
                 onAccept={handleAcceptQuality}
+                onBestEffort={handleBestEffort}
               />
             </div>
           )}
@@ -473,6 +499,19 @@ export const CaptureScreen = () => {
           {/* ─── STEP 3: Metadata & Sync ─── */}
           {activeStep === 3 && (
             <div className="cs-meta-panel">
+              {qualityResult?.bestEffort && (
+                <div style={{
+                  padding: '10px 12px', marginBottom: 12,
+                  background: 'rgba(230, 20, 20, 0.08)', border: '2px solid var(--c-crimson)',
+                }}>
+                  <div style={{ color: 'var(--c-crimson)', fontWeight: 800, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+                    ⚠ BEST EFFORT — UNGRADABLE
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.4 }}>
+                    This image failed the quality gate. It will still be sent, flagged for mandatory ophthalmologist review.
+                  </div>
+                </div>
+              )}
               {!USE_MOCK_DATA && !questionnaire && (
                 <LoadError
                   compact

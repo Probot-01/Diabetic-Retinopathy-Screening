@@ -4,7 +4,12 @@ import { qualityReasonMessages } from '../../api/mockData';
 import { USE_MOCK_DATA } from '../../config';
 import { engineLabel } from '../../api/captureOptions';
 
-export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
+// Design doc §10.2: after this many failed attempts today, offer "proceed as
+// ungradable" instead of an infinite retry loop. Matches the mobile app's own
+// POLICY.maxRetakesBeforeBestEffort, so the two front-ends agree on the count.
+const MAX_RETAKES_BEFORE_BEST_EFFORT = 3;
+
+export const QualityResultPanel = ({ result, onRetake, onAccept, onBestEffort }) => {
   const { t } = useTranslation();
   const isPass       = result.qualityStatus === 'pass';
   const isRetake     = result.qualityStatus === 'retake';
@@ -48,6 +53,12 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
   ].filter(m => typeof m.value === 'number') : [];
   const lowestValue = metricList.length > 1 ? Math.min(...metricList.map(m => m.value)) : null;
   metricList.forEach(m => { m.isLowest = m.value === lowestValue; });
+
+  // retakeCount counts PRIOR failed attempts today, before this one; this
+  // attempt itself also failed (isRetake), so it counts as +1.
+  const failedAttempts = (result.retakeCount || 0) + (isRetake ? 1 : 0);
+  const bestEffortAvailable = isRetake && !USE_MOCK_DATA
+    && failedAttempts >= MAX_RETAKES_BEFORE_BEST_EFFORT && typeof onBestEffort === 'function';
 
   return (
     <div className="qr-panel">
@@ -183,11 +194,34 @@ export const QualityResultPanel = ({ result, onRetake, onAccept }) => {
           >
             <span style={{ marginRight: '6px' }}>↺</span> RETAKE IMAGE (RESOLVE DEFECT)
           </button>
-          {/* Demo only. In live mode a 'retake' capture is never queued for upload
-              (only pass/borderline are), so "proceeding anyway" would collect the
-              questionnaires for an image that can never reach central -- a silent
-              dead end. The technician retakes; the ungradable path (§10.2) is not
-              built on the desktop yet. */}
+
+          {/* §10.2: after MAX_RETAKES_BEFORE_BEST_EFFORT failed attempts, an
+              honest way forward that is not "retake forever" or "silently drop
+              the patient". Unlike the mock-only override below, this does NOT
+              pretend the image passed -- qualityStatus stays 'retake', the
+              capture is still queued for real (POST .../best-effort), and it
+              carries an explicit flag central can hold at mandatory review. */}
+          {bestEffortAvailable && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--c-crimson)', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                {failedAttempts} FAILED ATTEMPTS FOR THIS PATIENT TODAY
+              </div>
+              <button
+                type="button"
+                className="btn btn--outline"
+                onClick={onBestEffort}
+                style={{ width: '100%', justifyContent: 'center', fontWeight: 700, padding: '10px', fontSize: '12px' }}
+              >
+                PROCEED AS UNGRADABLE (BEST EFFORT) →
+              </button>
+              <div style={{ fontSize: '11px', opacity: 0.75, lineHeight: 1.4 }}>
+                Sends this image as-is. It is flagged for mandatory ophthalmologist review — it does not report as a pass.
+              </div>
+            </div>
+          )}
+
+          {/* Demo only. In live mode a plain 'retake' capture (not yet at the
+              best-effort threshold above) is never queued for upload. */}
           {USE_MOCK_DATA && (
             <button
               type="button"

@@ -59,6 +59,14 @@ function describe(item) {
     if (item.uploadProgress) {
       return { ...base, label: `UPLOADING ${item.uploadProgress.sent}/${item.uploadProgress.total}`, actionText: 'UPLOADING…' };
     }
+    // §10.2: this capture failed the gate (qualityStatus stays 'retake') but the
+    // technician marked it best effort, so it is queued like a real pass. Say
+    // so plainly -- "QUALITY PASS" would be a fabricated result for an image
+    // that did not pass.
+    if (item.bestEffort) {
+      return { ...base, label: 'BEST EFFORT — UNGRADABLE, QUEUED', badgeClass: 'stage-badge--pass', actionText: 'WAITING (SYNC)',
+        detail: 'This image failed the quality check but was sent anyway for mandatory ophthalmologist review.' };
+    }
     return { ...base, label: item.formsComplete === true ? 'QUEUED — PENDING UPLOAD' : 'QUALITY PASS',
       badgeClass: 'stage-badge--pass', actionText: 'WAITING (SYNC)' };
   }

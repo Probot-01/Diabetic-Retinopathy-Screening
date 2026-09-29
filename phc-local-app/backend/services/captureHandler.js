@@ -295,6 +295,50 @@ function recheckCapture(captureId) {
   return gateCapture(captureId);
 }
 
+/**
+ * markBestEffort(captureId)  (design doc §10.2)
+ *
+ * After a fixed number of failed retakes, the technician can mark the capture
+ * "best effort -- proceed as ungradable" rather than retaking forever or the
+ * case silently never being recorded. Only makes sense for an image that
+ * actually failed the gate: a 'pass'/'borderline' capture already queues
+ * itself, and 'pending' has no verdict yet to override.
+ *
+ * A 'retake' capture is normally never queued (gateCapture's own comment: "the
+ * technician is about to shoot it again"). This is the one path that queues one
+ * anyway -- with best_effort = 1 so central sees this is a technician override,
+ * not a real pass, and (a follow-up on the central side, not built here) can
+ * hold it at Tier C regardless of what the classifier says.
+ *
+ * Idempotent: calling it twice does not create a second sync_queue row.
+ */
+function markBestEffort(captureId) {
+  const row = db.prepare('SELECT * FROM captures WHERE capture_id = ?').get(captureId);
+  if (!row) throw new Error(`markBestEffort: capture_not_found (${captureId})`);
+  if (row.quality_status !== 'retake') {
+    throw Object.assign(
+      new Error("best_effort_not_applicable: only a capture the quality gate marked 'retake' can be proceeded as best effort"),
+      { code: 'best_effort_not_applicable', captureId });
+  }
+
+  const commit = db.transaction(() => {
+    db.prepare('UPDATE captures SET best_effort = 1 WHERE capture_id = ?').run(captureId);
+    const alreadyQueued = db.prepare('SELECT 1 FROM sync_queue WHERE capture_id = ?').get(captureId);
+    if (!alreadyQueued) {
+      // 'high' priority: this is exactly the kind of uncertain case §9.2 wants
+      // sent first, and there is no tier above 'high' in this queue's scale.
+      db.prepare(`
+        INSERT INTO sync_queue
+          (queue_id, capture_id, status, priority, chunks_sent, chunks_total, last_attempt_at)
+        VALUES (?, ?, 'pending', 'high', 0, 1, NULL)
+      `).run(generateLocalId(), captureId);
+    }
+  });
+  commit();
+
+  return toResponse(db.prepare('SELECT * FROM captures WHERE capture_id = ?').get(captureId));
+}
+
 /** The POST /captures response body for a capture row (api-contracts.md, plus qualityGateEngine). */
 function toResponse(row) {
   let engine = null;
@@ -309,7 +353,10 @@ function toResponse(row) {
     // Which engine ran the gate ({ engine, fallback, detail }). null only for a
     // capture gated before this was stored -- never guessed.
     qualityGateEngine: engine,
+    // §10.2: a technician-forced proceed on an image that failed the gate.
+    // false for every ordinary capture, including a real pass/borderline.
+    bestEffort: !!row.best_effort,
   };
 }
 
-module.exports = { handleCapture, recheckCapture, STORAGE_DIR };
+module.exports = { handleCapture, recheckCapture, markBestEffort, STORAGE_DIR };

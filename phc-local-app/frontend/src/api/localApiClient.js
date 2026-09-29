@@ -247,6 +247,22 @@ class LocalApiClient {
     return data;
   }
 
+  /**
+   * markBestEffort(captureId) -> POST /captures/:captureId/best-effort.
+   * Design doc §10.2: after repeated failed retakes, queue the capture anyway
+   * with an explicit "technician override, ungradable" flag, rather than an
+   * infinite retry loop or the case silently never being recorded. Only valid
+   * on a capture the gate marked 'retake'; live only.
+   */
+  async markBestEffort(captureId) {
+    if (this.useMock) return null;
+    const data = await this._request(`/captures/${encodeURIComponent(captureId)}/best-effort`, { method: 'POST' }, CAPTURE_TIMEOUT_MS);
+    if (!data || typeof data.captureId !== 'string' || data.bestEffort !== true) {
+      throw new ApiError('bad_response', 'The best-effort response did not have the expected shape.');
+    }
+    return data;
+  }
+
   async saveCaptureMetadata(captureId, metadata) {
     if (!this.useMock) return null;
     await delay(400);
