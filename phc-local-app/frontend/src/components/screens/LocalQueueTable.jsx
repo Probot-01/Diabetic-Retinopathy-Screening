@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { localApi } from '../../api/localApiClient';
 import { mockAiPredictions } from '../../api/mockData';
@@ -96,6 +97,7 @@ function describe(item) {
 
 export const LocalQueueTable = () => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [queue, setQueue] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -142,6 +144,16 @@ export const LocalQueueTable = () => {
     e?.stopPropagation();
     setSelectedItem(item);
     setIsModalOpen(true);
+  };
+
+  // Design doc §10.4: DR is graded per eye, so one visit is up to two
+  // independent captures for the same patient. Skips registration entirely --
+  // the patient already exists -- and reuses whatever questionnaire this
+  // station cached for them at registration, exactly as a normal capture does.
+  const handleCaptureOtherEye = (item, e) => {
+    e?.stopPropagation();
+    const query = new URLSearchParams({ patientId: item.patientId, name: item.patientName || '' }).toString();
+    navigate(`/capture?${query}`);
   };
 
   const renderStageIndicator = (item) => {
@@ -257,24 +269,39 @@ export const LocalQueueTable = () => {
                       {renderStageIndicator(item)}
                     </td>
                     <td>
-                      {config.actionDisabled || !isReady ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
+                        {config.actionDisabled || !isReady ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="btn-action-col btn-action-col--disabled"
+                            title={config.detail || `Pipeline stage: ${config.label}`}
+                          >
+                            {config.actionText}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-action-col btn-action-col--active"
+                            onClick={(e) => handleOpenResult(item, e)}
+                          >
+                            {config.actionText}
+                          </button>
+                        )}
+                        {/* Design doc §10.4: DR is graded per eye. This capture's own
+                            stage never blocks starting the other eye -- it is an
+                            independent capture for the same patient, so this is
+                            always available, not gated behind config.actionDisabled. */}
                         <button
                           type="button"
-                          disabled
-                          className="btn-action-col btn-action-col--disabled"
-                          title={config.detail || `Pipeline stage: ${config.label}`}
+                          className="btn btn--outline btn--sm"
+                          style={{ fontSize: '10px', padding: '3px 8px' }}
+                          onClick={(e) => handleCaptureOtherEye(item, e)}
+                          data-testid="capture-other-eye"
                         >
-                          {config.actionText}
+                          CAPTURE OTHER EYE →
                         </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn-action-col btn-action-col--active"
-                          onClick={(e) => handleOpenResult(item, e)}
-                        >
-                          {config.actionText}
-                        </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 );

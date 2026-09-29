@@ -205,6 +205,54 @@ export const PatientRegistrationForm = () => {
     setConsentObtained(false); setConsentGivenAt(null);
   };
 
+  // Shared between a fresh registration and "USE THIS PATIENT" on a confirmed
+  // duplicate: the same today's-visit answers, either way.
+  const buildQuestionnaire = () => ({
+    knownDiabetic,
+    // The API has no "not diabetic" value for this question and requires
+    // one of the four buckets. For a patient who is not a known diabetic
+    // it is recorded as '< 1 yr' -- and the form says so on screen; it is
+    // never quietly a leftover default.
+    yearsSinceDiagnosis: knownDiabetic ? yearsSinceDx : 'lt1',
+    glycemicControl, bloodPressure,
+    // Not asked (and sent as null) where pregnancy cannot apply.
+    pregnancy: couldBePregnant ? pregnancy : 'not_applicable',
+    ...eyeSymptoms,
+  });
+
+  // §10.3: the technician confirms a search hit IS this same person. Reuse
+  // their existing id -- a second registration would start a second, unlinked
+  // screening history for one patient -- rather than creating a new record.
+  // Today's questionnaire is still recorded (risk factors and symptoms change
+  // between visits) and cached on this station the same way a fresh
+  // registration's is; the existing patient's own demographic record on the
+  // server is left untouched.
+  const [usingExistingId, setUsingExistingId] = useState(null);
+  const handleUseExisting = async (existing) => {
+    if (!consentObtained) {
+      alert('Informed verbal consent is required before initiating screening.');
+      return;
+    }
+    if (!USE_MOCK_DATA && questionnaireMissing.length) {
+      setSubmitError({ message: 'Answer every question before capture: ' + questionnaireMissing.join(', ') + '.' });
+      return;
+    }
+    setSubmitError(null);
+    setUsingExistingId(existing.patientId);
+    try {
+      saveQuestionnaire(existing.patientId, buildQuestionnaire());
+      const query = new URLSearchParams({
+        patientId: existing.patientId,
+        name: existing.name || fullName,
+        age: String(existing.age ?? age ?? ''),
+        contact: contactNumber || '',
+      }).toString();
+      navigate(`/capture?${query}`);
+    } finally {
+      setUsingExistingId(null);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!consentObtained) {
@@ -228,18 +276,7 @@ export const PatientRegistrationForm = () => {
         firstName, middleName, lastName,
         gender, dob, maritalStatus, bloodGroup,
         address, state, pincode, district, occupation, altPhone,
-        questionnaire: {
-          knownDiabetic,
-          // The API has no "not diabetic" value for this question and requires
-          // one of the four buckets. For a patient who is not a known diabetic
-          // it is recorded as '< 1 yr' -- and the form says so on screen; it is
-          // never quietly a leftover default.
-          yearsSinceDiagnosis: knownDiabetic ? yearsSinceDx : 'lt1',
-          glycemicControl, bloodPressure,
-          // Not asked (and sent as null) where pregnancy cannot apply.
-          pregnancy: couldBePregnant ? pregnancy : 'not_applicable',
-          ...eyeSymptoms,
-        },
+        questionnaire: buildQuestionnaire(),
         consentGivenAt: consentGivenAt || new Date().toISOString(),
       };
       const newPatient = await localApi.registerPatient(payload);
@@ -605,6 +642,16 @@ export const PatientRegistrationForm = () => {
                       matched on {d.matchedOn.join(' + ')}
                     </span>
                   )}
+                  <button
+                    type="button"
+                    className="btn btn--outline btn--sm"
+                    style={{ marginLeft: 'auto', fontSize: '11px', padding: '4px 10px' }}
+                    disabled={usingExistingId === d.patientId}
+                    onClick={() => handleUseExisting(d)}
+                    data-testid="use-existing-patient"
+                  >
+                    {usingExistingId === d.patientId ? 'OPENING…' : 'USE THIS PATIENT →'}
+                  </button>
                 </div>
               ))}
             </div>
