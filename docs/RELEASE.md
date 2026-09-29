@@ -34,13 +34,18 @@ tracked), so this list is how you know you have the same ones.
 ## Checksums (SHA-256)
 
 Every model file present under `central-system/backend/ml-pipeline/models/` on the recording machine, the
-served ones included. Verify from `central-system/backend/ml-pipeline/`:
+served ones included. The block below is also tracked as
+`central-system/backend/ml-pipeline/models.sha256`, so a fresh clone can check what it has without retyping
+it: `npm run models:verify` (repo root) reports exactly which files are missing or byte-different, no network
+needed. `npm run models:fetch` (or `node scripts/fetch-models.js --url <archive-link>`) additionally downloads
+and extracts an archive first, then runs the same check — point it at wherever the weights end up shared
+(Drive folder / GitHub Release asset), via `--url` or a `MODELS_ARCHIVE_URL` env var.
+
+Verify by hand instead, from `central-system/backend/ml-pipeline/`:
 
 ```
 sha256sum -c models.sha256
 ```
-
-where `models.sha256` is the block below saved to a file.
 
 ```
 f8b69e5813fb39ec467f45c7b25f030779bc204cc582b7f941fbd00c872d5235  models/branchA_v1.mat
