@@ -104,6 +104,17 @@ class LocalApiClient {
     });
   }
 
+  /**
+   * GET /auth/me -> { user }. Used at app startup to confirm a token saved in
+   * localStorage from a previous visit is still live before trusting it, so a
+   * stale/expired session doesn't render the authenticated layout for a beat
+   * and then bounce (App.jsx). Throws (401) exactly like any other call when
+   * the session is gone; _request's own 401 handling already clears it.
+   */
+  async getMe() {
+    return this._request('/auth/me');
+  }
+
   async getPatients() {
     if (this.useMock) {
       await delay(500);
