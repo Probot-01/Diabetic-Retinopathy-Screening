@@ -1,4 +1,7 @@
-
+/**
+ * Non-blocking error/info banner -- replaces alert() (Kankshi's plan §3.4):
+ * fixed at the top, auto-dismisses, never blocks the technician.
+ */
 import React, { createContext, useCallback, useContext, useRef, useState, ReactNode } from 'react';
 import { Animated, Pressable, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,7 +10,7 @@ import { makeStyles } from '../theme/ThemeContext';
 type Tone = 'error' | 'info' | 'success';
 interface ToastState { message: string; tone: Tone }
 
-const ToastContext = createContext<(message: string, tone?: Tone) => void>(() => { });
+const ToastContext = createContext<(message: string, tone?: Tone) => void>(() => {});
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const s = useStyles();

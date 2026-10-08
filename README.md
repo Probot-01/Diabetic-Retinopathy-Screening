@@ -1,7 +1,7 @@
 # NetraSetu — Explainable AI for Diabetic Retinopathy Screening in Rural India
 
 **Smart India Hackathon 2026 — PS 26038** · Team "Game Of Codes"
-Tanuj (team lead; ML layer, mobile app, integration), Saad (backend, database), Krrish (lead frontend developer), Parth (frontend, presentations), Vedant (frontend, presentations), Kankshi (backend and ML layer support)
+
 
 NetraSetu lets a minimally trained technician at a rural Primary Health Centre (PHC) screen a
 patient for diabetic retinopathy (DR) in minutes. Two independent AI branches cross-check every
@@ -26,7 +26,7 @@ seconds instead of screening everyone.
 | Central API | https://netrasetu-central.onrender.com/health |
 | PHC local API | https://netrasetu-phc.onrender.com/health |
 | Android app (APK, direct install, no Play Store) | [Download](https://expo.dev/artifacts/eas/AXeqZ3jshQkh7qTIsaXkO3nUBWXyqH9XnyRv1di0jYo.apk) |
-| Demo video | _to be added_ |
+| Demo video | [Watch Demo](https://youtu.be/Oz_L2le-gJA?si=gId7qw4Bl5HCIVB0)|
 | Google Drive (shareable PDFs: technical documentation, ML benchmarks, MATLAB-application deliverables) | [Open](https://drive.google.com/drive/folders/1e--esRoyi59QNlBE0cQxvH51eg6y62Pv) |
 
 **Demo technician login (hosted PHC station):** username `demo`, password `Fundus-Comet-52` — a
@@ -496,11 +496,11 @@ test real SMS sending; every other value here is safe to share.
 
 | File | Key variables |
 |---|---|
-| `central-system/backend/.env` | `DATABASE_URL`, `CORS_ALLOWED_ORIGINS`, `AUTH_ENABLED`, `JWT_SECRET`, `PHC_AUTH_ENABLED`, `MATLAB_EXECUTABLE`, `INFERENCE_BACKEND` (`matlab` / `python` / `remote`), `MEDIA_ENCRYPTION_KEY`, `MATLAB_ALLOW_FALLBACK` |
+| `central-system/backend/.env` | `DATABASE_URL`, `CORS_ALLOWED_ORIGINS`, `AUTH_ENABLED`, `JWT_SECRET`, `PHC_AUTH_ENABLED`, `MATLAB_EXECUTABLE`, `INFERENCE_BACKEND` (`matlab` / `python` / `remote`), `SEG_INFERENCE_BACKEND` (`matlab` / `python`), `PYTHON_EXECUTABLE` (unset = bare `python` on `PATH` — set explicitly if that isn't your intended interpreter), `MEDIA_ENCRYPTION_KEY`, `MATLAB_ALLOW_FALLBACK` |
 | `phc-local-app/backend/.env` | `CENTRAL_API_URL`, `PHC_CODE`, `PHC_ID`, `PHC_API_KEY`, `MATLAB_EXECUTABLE`, `LOCAL_AUTH_ENABLED`, `QUALITY_GATE_ALLOW_FALLBACK` |
 | `central-system/frontend/.env` | `VITE_CENTRAL_API_BASE`, `VITE_DATA_MODE` |
 | `phc-local-app/frontend/.env` | `VITE_LOCAL_API_BASE`, `VITE_DATA_MODE` |
-| `phc-local-app/mobile/.env` | `EXPO_PUBLIC_CENTRAL_API_URL`, `EXPO_PUBLIC_PHC_API_KEY`, `EXPO_PUBLIC_PHC_CODE` |
+| `phc-local-app/mobile/.env` | `EXPO_PUBLIC_CENTRAL_API_URL`, `EXPO_PUBLIC_PHC_API_KEY`, `EXPO_PUBLIC_PHC_CODE`, `EXPO_PUBLIC_USE_RN_FETCH` (keep set to `1` — Expo Go's own fetch can't send the image upload), `EXPO_PUBLIC_TECHNICIANS` (bakes in fixed logins for a release build reached off the PHC's LAN) |
 
 No app has a built-in server URL — an unset one shows an on-screen error, never a silent default.
 `VITE_DATA_MODE=mock` shows fixture data with a permanent **"DEMO DATA"** banner and is never used

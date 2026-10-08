@@ -1,4 +1,8 @@
-
+/**
+ * App root: loads fonts, opens the database, applies saved settings and
+ * preferences, restores the technician session, and starts the sync manager
+ * once someone is logged in.
+ */
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';

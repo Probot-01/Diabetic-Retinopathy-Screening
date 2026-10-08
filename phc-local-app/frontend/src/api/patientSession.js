@@ -1,4 +1,8 @@
-
+// The patient questionnaire is answered once, at registration, and then attached
+// to every capture of that patient (POST /captures/:captureId/questionnaire).
+// It is kept per patientId: the capture screen used to read "the latest
+// registered patient", so opening a capture for any other patient sent that
+// other person's answers.
 
 const KEY = 'netra_patient_questionnaires';
 

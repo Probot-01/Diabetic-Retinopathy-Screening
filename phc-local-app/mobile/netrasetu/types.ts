@@ -1,4 +1,9 @@
+/**
+ * Domain types. Enum values are the exact strings in docs/api-contracts.md --
+ * central validates them with ===, so a near-miss is a rejected upload.
+ */
 
+// ── Patient (registration form, desktop PatientRegistrationForm.jsx) ───────
 export interface Demographics {
   patientType: 'new' | 'revisit' | 'referral';
   abhaId: string;

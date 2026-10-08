@@ -1,5 +1,8 @@
-
-
+/**
+ * Image storage. Every capture's image is copied into the app's own document
+ * directory under its capture ID: a gallery URI or a camera cache file can
+ * disappear before a multi-day outage ends, and the queued case must not.
+ */
 import { Directory, File, Paths } from 'expo-file-system';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { POLICY } from '../config';

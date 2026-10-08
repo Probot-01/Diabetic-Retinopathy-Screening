@@ -1,4 +1,3 @@
-
 # ── Node.js ───────────────────────────────────────────────────────────────────
 node_modules/
 npm-debug.log*
@@ -231,5 +230,3 @@ central-system/backend/ml-pipeline/training/diag*_err.txt
 # outcome, resumable and regenerated on every run -- not something to version.
 full_dataset_manifest.json
 full_dataset_results.jsonl
-demo/
-dedmo/
