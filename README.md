@@ -32,6 +32,36 @@ seconds instead of screening everyone.
 **Demo technician login (hosted PHC station):** username `demo`, password `Fundus-Comet-52` — a
 fixed demo-only account, intentionally public for judge access.
 
+**Demo central logins** (https://centralsys.vercel.app — scroll past the intro, then pick the matching role card):
+
+| Role card | Email | Password |
+|---|---|---|
+| **OPHTHALMOLOGIST** | `ophthalmologist@demo.netrasetu.local` | `Retina-Comet-74` |
+| **DISTRICT WORKER** (district admin) | `admin@demo.netrasetu.local` | `Harbor-Falcon-29` |
+
+Both are fixed demo-only accounts, intentionally public for judge access; the system holds only
+public-dataset images, no real patient data.
+
+### Before you try the hosted demo: expect waits
+
+The hosted backends run on free-tier hosting that **sleeps after ~15 minutes idle**. Nothing is
+broken when a step is slow; the service is waking up.
+
+| What you do | Expected wait |
+|---|---|
+| First login / first page of data after idle | up to **~1 minute** (if it seems stuck, wait and retry once) |
+| Quality check on a new capture | a few seconds (up to ~30 s if the PHC service was asleep) |
+| AI grading of a new capture | **~1–2 minutes** per case (it appears in the ophthalmologist queue when done) |
+| First new capture after a long idle | the AI service may still be waking and the case can show **"grading failed at central"** — simply capture again once, and it will grade normally |
+
+**Fastest way to see everything:** log in as the ophthalmologist — pre-graded demo cases are
+already in the queue (including a branch-disagreement case), so the full review flow works without
+waiting for any new grading.
+
+On the hosted demo, the PHC quality check shows a **"This check ran on a backup system"** notice.
+That is expected and honest: this host has no MATLAB, so the verified JavaScript port of the MATLAB
+quality gate runs instead, and the app always tells the technician when that happens.
+
 This hosted deployment is a **separate configuration from the full local/offline deployment** —
 see "Two deployment modes" below and `docs/TECHNICAL_DOCUMENTATION.md` for the full explanation of
 why they differ and what each one proves.
@@ -215,9 +245,11 @@ We'd rather a judge read this than discover it live.
   verified against their MATLAB originals (0 mismatches across hundreds of test cases — see
   `docs/ML_BENCHMARKS.md` §7). See "Two deployment modes" below for why this split exists and what
   it does and doesn't mean for the result you see.
-- **Media storage on the hosted demo is ephemeral.** Render's free-tier filesystem resets on
-  redeploy, so images from older demo cases may 404 after a redeploy. The local/offline deployment
-  does not have this limitation.
+- **The hosted demo's database is Neon (free-tier PostgreSQL).** Render's free filesystem resets on
+  every sleep, restart and redeploy, so case media (fundus images, Grad-CAM overlays, masks, report
+  PDFs) is also stored in that database, still AES-256-GCM encrypted, and restored to disk on first
+  access (`central-system/backend/services/mediaStore.js`). Images therefore survive restarts —
+  verified by restarting the service and reloading every case.
 
 Full status detail: `docs/TECHNICAL_DOCUMENTATION.md`.
 
